@@ -4782,6 +4782,12 @@ export interface ErrorPayload {
 export interface NoticePayload {
   message: string
 }
+/** A turn began. Synthesized delegation wakes carry their trusted display projection. Ordinary prompts still send an empty payload; clients already staged the human's row. */
+export interface MessageStartPayload {
+  text?: string | null
+  display_kind?: string | null
+  display_metadata?: Record<string, unknown> | null
+}
 /** ``prompt_turn._invoke_agent._stream`` (message.delta: ``text`` + optional ``rendered``), ``agent_callbacks._agent_cbs`` (reasoning.delta / thinking.delta), ``tool_progress._progress_reasoning`` (reasoning.available). ``verbose`` rides only when the session's verbose reasoning mode is on. */
 export interface StreamDeltaPayload {
   text: string
@@ -5998,8 +6004,8 @@ export interface BackendGatewayEventMap {
   'message.interim': MessageInterimPayload
   /** The agent reacted to a message; paint it live. */
   'message.reaction': MessageReactionPayload
-  /** A turn began streaming; no payload. */
-  'message.start': Record<string, never>
+  /** A turn began streaming; optional internal timeline row. */
+  'message.start': MessageStartPayload
   /** The MoA aggregator started. */
   'moa.aggregating': MoaAggregatingPayload
   /** MoA phase transition (currently only ``aggregator``). */

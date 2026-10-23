@@ -59,9 +59,9 @@ export const writeActiveSessionFile = (sessionId: null | string, file = process.
 }
 
 export const liveSessionInflightMessages = (inflight?: null | InflightTurn): Msg[] => {
-  const user = String(inflight?.user ?? '').trim()
+  const user = String(inflight?.user ?? '')
 
-  return user
+  return user.trim()
     ? toTranscriptMessages([
         {
           role: 'user',

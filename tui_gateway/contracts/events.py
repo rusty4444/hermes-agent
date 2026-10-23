@@ -129,7 +129,18 @@ event("notice", NoticePayload, doc="Informational one-liner for the session (cap
 # ── turn stream ───────────────────────────────────────────────────────────────────────────────
 
 
-event("message.start", None, doc="A turn began streaming; no payload.")
+class MessageStartPayload(Payload):
+    """A turn began. Synthesized delegation wakes carry their trusted display projection.
+
+    Ordinary prompts still send an empty payload; clients already staged the human's row.
+    """
+
+    text: str | None = None
+    display_kind: str | None = None
+    display_metadata: dict[str, JsonValue] | None = None
+
+
+event("message.start", MessageStartPayload, doc="A turn began streaming; optional internal timeline row.")
 
 
 class StreamDeltaPayload(Payload):

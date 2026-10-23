@@ -281,6 +281,27 @@ global `details_mode`. To reshape the layout:
 Anything set explicitly in `display.sections` wins over the defaults, so
 existing configs keep working unchanged.
 
+## Internal job notices
+
+Asynchronous delegation completions appear as neutral **Internal job** cards, not
+messages from you. The status stays visible (including failures and incomplete
+work); the full worker report and transcript paths start collapsed. Click
+**Expand details** / **Collapse details**, or focus a control with **Tab** /
+**Shift+Tab** and press **Enter** or **Space**. **Esc** returns to the composer.
+Approval, clarification, password and other decision prompts remain separate,
+visible prompts and take keyboard priority.
+
+Expansion survives scrolling, session switching and rehydration within the same
+TUI process. A fresh launch starts collapsed again. The agent still receives the
+complete result; expanding a card does not start a turn or change model context.
+`/agents` remains the live agent audit view.
+
+Only backend-typed delegation rows receive these cards. Pasting or quoting an
+`[ASYNC DELEGATION ...]` header does not make your message internal. Older saved
+rows without display provenance remain ordinary messages: the TUI does not guess
+their origin from the text or rewrite your database. Background-process notices
+retain their existing presentation.
+
 ## Sessions
 
 Sessions are shared between the TUI and the classic CLI — both write to the same `~/.hermes/state.db`. You can start a session in one, resume in the other. The session picker surfaces sessions from both sources, with a source tag.

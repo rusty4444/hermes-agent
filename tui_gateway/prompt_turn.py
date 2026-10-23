@@ -1157,7 +1157,13 @@ def _run_prompt_submit(
         sid, session.get("session_key") or "", getattr(agent, "session_id", "") or "",
         display_kind or "user", len(text) if isinstance(text, str) else "-", len(images))
     if not muted:
-        _emit("message.start", sid)
+        # Reuse the persisted display provenance on the live path, too. Never infer an
+        # internal origin from text: a human may quote the exact completion marker.
+        if display_kind == "async_delegation_complete" and isinstance(text, str):
+            _emit("message.start", sid, {
+                "text": text, "display_kind": display_kind, "display_metadata": display_metadata})
+        else:
+            _emit("message.start", sid)
 
     def run_body():
         # RPC-dispatcher ContextVars do not follow onto this thread: rebind the transport

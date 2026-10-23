@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { LONG_MSG } from '../config/limits.js'
 import { t } from '../i18n/runtime.js'
 import { buildToolTrailLine } from '../lib/text.js'
@@ -91,7 +93,17 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       out.push({
         kind: 'event',
         role: 'system',
-        text: typeof meta?.display_text === 'string' ? meta.display_text : label
+        text: typeof meta?.display_text === 'string' ? meta.display_text : label,
+        ...(createdAt !== undefined && { createdAt }),
+        ...(display_kind === 'async_delegation_complete' && {
+          jobNotice: {
+            // Older *typed* rows have no notice_id. A content identity survives
+            // hydration/virtualization without confusing two sessions' row ids.
+            id: typeof meta?.notice_id === 'string' ? meta.notice_id : createHash('sha256').update(text).digest('hex'),
+            body: text,
+            hasIssues: meta?.has_issues === true || (typeof meta?.failed_count === 'number' && meta.failed_count > 0)
+          }
+        })
       })
       pending = []
 
@@ -107,7 +119,27 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
     }
   }
 
-  return out
+  return dedupeJobNotices(out)
+}
+
+// Resume can include the same row in both history and the in-flight snapshot.
+// Replayed start events must not add a second card (or alter human messages).
+export const dedupeJobNotices = (items: Msg[]): Msg[] => {
+  const seen = new Set<string>()
+
+  return items.filter(msg => {
+    if (!msg.jobNotice) {
+      return true
+    }
+
+    if (seen.has(msg.jobNotice.id)) {
+      return false
+    }
+
+    seen.add(msg.jobNotice.id)
+
+    return true
+  })
 }
 
 export const fmtDuration = (ms: number) => {

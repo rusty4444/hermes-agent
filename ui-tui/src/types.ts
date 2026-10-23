@@ -131,6 +131,8 @@ export interface ClarifyReq {
 }
 
 export interface Msg {
+  // Only populated from the gateway's trusted display_kind, never message text.
+  jobNotice?: { id: string; body: string; hasIssues?: boolean }
   info?: SessionInfo
   kind?: 'diff' | 'event' | 'intro' | 'panel' | 'slash' | 'trail'
   panelData?: PanelData

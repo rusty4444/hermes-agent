@@ -97,6 +97,11 @@ export const estimatedMsgHeight = (
     return Math.max(3, (msg.panelData?.sections.length ?? 1) * 2 + 1)
   }
 
+  if (msg.jobNotice) {
+    // Collapsed by default; Yoga measures an expanded card after interaction.
+    return 3
+  }
+
   if (msg.kind === 'trail' && msg.todos?.length) {
     if (msg.todoCollapsedByDefault) {
       return 2

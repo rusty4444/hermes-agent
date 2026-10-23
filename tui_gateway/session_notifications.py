@@ -161,12 +161,8 @@ def _notif_log_failure(what: str, exc: BaseException) -> None:
 
 
 def _notif_submit(rid: str, sid: str, session: dict, text: str, what: str, **kwargs) -> None:
-    """message.start + _run_prompt_submit for a claimed (running=True) turn; releases on failure."""
+    """Submit a claimed turn; the admitted prompt emits its one message.start. Release on failure."""
     try:
-        from gateway.warning_notifications import render_notification
-        with _session_profile_runtime_scope(session):
-            render_notification(lambda: _emit("message.start", sid), platform="tui",
-                                diagnostic=(kwargs.get("display_metadata") or {}).get("notification_category") == "diagnostic")
         _run_prompt_submit(rid, sid, session, text, **kwargs)
     except Exception as exc:
         _notif_log_failure(what, exc)
@@ -803,14 +799,22 @@ def _notification_poller_scoped_loop(stop_event: threading.Event, sid: str, sess
 
 def _async_delegation_display_metadata(evt: dict) -> dict:
     """Build display-only metadata before the completion event is formatted."""
-    from tools.process_registry_notifications import async_delegation_display_text
+    from tools.process_registry_notifications import async_delegation_display_text, _is_truncated
     raw_results = evt.get("results")
     results: list[dict] = [r for r in raw_results if isinstance(r, dict)] if isinstance(raw_results, list) else []
     task_count = len(results) or 1
     completed_count = sum(1 for r in results if r.get("status") in {"completed", "success"})
     failed_count = sum(1 for r in results if r.get("status") in {"failed", "error"})
+    has_issues = any(r.get("status", "completed") not in {"completed", "success"}
+                     or r.get("error") or _is_truncated(r) for r in results or [evt])
     duration = evt.get("total_duration_seconds") or evt.get("duration_seconds")
+    # A failed child may report before its batch completes. It is a separate notice,
+    # not an update/replay of the batch's final completion.
+    suffix = ("task-failure:" + ",".join(str(r.get("task_index", 0)) for r in results)
+              if evt.get("task_failure_notice") else "complete")
     return {"display_text": async_delegation_display_text(evt),
+            "has_issues": has_issues,
+            "notice_id": f"delegation:{evt.get('delegation_id') or ''}:{suffix}",
             "delegation_id": str(evt.get("delegation_id") or ""), "task_count": task_count,
             "completed_count": completed_count or task_count - failed_count, "failed_count": failed_count,
             **({"duration_seconds": duration} if isinstance(duration, (int, float)) else {})}

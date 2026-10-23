@@ -15,6 +15,7 @@ import { boundedLiveRenderText, compactPreview, isPasteBackedText } from '../lib
 import type { Theme } from '../theme.js'
 import type { ActiveTool, DetailsMode, Msg, SectionVisibility } from '../types.js'
 
+import { InternalJobNotice } from './internalJobNotice.js'
 import { Md } from './markdown.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { ToolTrail } from './thinking.js'
@@ -148,6 +149,10 @@ export const MessageLine = memo(function MessageLine({
   // Timeline events (model switches, delegation completions) render as
   // dim ◈ markers with no gutter — not as opaque user messages.
   if (msg.kind === 'event') {
+    if (msg.jobNotice) {
+      return <InternalJobNotice msg={msg} t={t} />
+    }
+
     const eventGutterWidth = transcriptGutterWidth('system', t.brand.prompt)
 
     return (

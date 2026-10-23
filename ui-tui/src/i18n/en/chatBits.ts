@@ -70,6 +70,11 @@ export const chatBitsEn = {
     messageLine: {
       emptyToolResult: '(empty tool result)',
       systemMessage: '(system message)',
+      internalJob: 'Internal job',
+      jobIssues: 'Issues',
+      expandJob: 'Expand details',
+      collapseJob: 'Collapse details',
+      jobKeyboardHint: 'Enter/Space · Esc: composer',
       chars: (count: string) => `${count} chars`,
       longMessage: '[long message]',
       response: 'Response'
