@@ -4,7 +4,14 @@ import type { ReactNode } from 'react'
 
 import { useGateway } from '../app/gatewayContext.js'
 import type { AppOverlaysProps } from '../app/interfaces.js'
-import { $overlayState, hasFloatingPanel, patchOverlayState } from '../app/overlayStore.js'
+import {
+  $overlayState,
+  getActivePromptKey,
+  hasFloatingPanel,
+  patchOverlayState,
+  type PromptKey
+} from '../app/overlayStore.js'
+import { capturePromptOwner, guardPromptAction, promptInstanceKey } from '../app/promptOwnership.js'
 import { $uiSessionId, $uiTheme } from '../app/uiStore.js'
 
 import { ActiveSessionSwitcher } from './activeSessionSwitcher.js'
@@ -81,16 +88,20 @@ export function PromptZone({
 >) {
   const overlay = useStore($overlayState)
   const theme = useStore($uiTheme)
+  const active = getActivePromptKey(overlay)
 
-  if (overlay.approval) {
+  const guard = <Args extends unknown[]>(key: PromptKey, action: (...args: Args) => void) =>
+    guardPromptAction(capturePromptOwner(key, overlay[key]), action)
+
+  if (active === 'approval' && overlay.approval) {
     return (
-      <PromptCell cols={cols} id="approval">
-        <ApprovalPrompt cols={cols} onChoice={onApprovalChoice} req={overlay.approval} t={theme} />
+      <PromptCell cols={cols} id="approval" key={promptInstanceKey(capturePromptOwner('approval', overlay.approval))}>
+        <ApprovalPrompt cols={cols} onChoice={guard('approval', onApprovalChoice)} req={overlay.approval} t={theme} />
       </PromptCell>
     )
   }
 
-  if (overlay.billing) {
+  if (active === 'billing' && overlay.billing) {
     const current = overlay.billing
 
     const onPatch = (next: Partial<typeof current>) =>
@@ -105,7 +116,7 @@ export function PromptZone({
     )
   }
 
-  if (overlay.subscription) {
+  if (active === 'subscription' && overlay.subscription) {
     const current = overlay.subscription
 
     const onPatch = (next: Partial<typeof current>) =>
@@ -122,7 +133,7 @@ export function PromptZone({
     )
   }
 
-  if (overlay.connection) {
+  if (active === 'connection' && overlay.connection) {
     return (
       <PromptCell cols={cols} id="connection">
         <ConnectionSetupOverlay cols={cols} t={theme} />
@@ -130,7 +141,7 @@ export function PromptZone({
     )
   }
 
-  if (overlay.confirm) {
+  if (active === 'confirm' && overlay.confirm) {
     const req = overlay.confirm
 
     const onConfirm = () => {
@@ -141,19 +152,24 @@ export function PromptZone({
     const onCancel = () => patchOverlayState({ confirm: null })
 
     return (
-      <PromptCell cols={cols} id="confirm">
-        <ConfirmPrompt onCancel={onCancel} onConfirm={onConfirm} req={req} t={theme} />
+      <PromptCell cols={cols} id="confirm" key={promptInstanceKey(capturePromptOwner('confirm', overlay.confirm))}>
+        <ConfirmPrompt
+          onCancel={guard('confirm', onCancel)}
+          onConfirm={guard('confirm', onConfirm)}
+          req={req}
+          t={theme}
+        />
       </PromptCell>
     )
   }
 
-  if (overlay.clarify) {
+  if (active === 'clarify' && overlay.clarify) {
     return (
-      <PromptCell cols={cols} id="clarify">
+      <PromptCell cols={cols} id="clarify" key={promptInstanceKey(capturePromptOwner('clarify', overlay.clarify))}>
         <ClarifyPrompt
           cols={cols}
-          onCancel={onClarifyCancel}
-          onQuestionAnswer={onClarifyQuestionAnswer}
+          onCancel={guard('clarify', onClarifyCancel)}
+          onQuestionAnswer={guard('clarify', onClarifyQuestionAnswer)}
           req={overlay.clarify}
           t={theme}
         />
@@ -161,21 +177,21 @@ export function PromptZone({
     )
   }
 
-  if (overlay.sudo) {
+  if (active === 'sudo' && overlay.sudo) {
     return (
-      <PromptCell cols={cols} id="sudo">
-        <SudoPrompt cols={cols} onSubmit={onSudoSubmit} t={theme} />
+      <PromptCell cols={cols} id="sudo" key={promptInstanceKey(capturePromptOwner('sudo', overlay.sudo))}>
+        <SudoPrompt cols={cols} onSubmit={guard('sudo', onSudoSubmit)} t={theme} />
       </PromptCell>
     )
   }
 
-  if (overlay.secret) {
+  if (active === 'secret' && overlay.secret) {
     return (
-      <PromptCell cols={cols} id="secret">
+      <PromptCell cols={cols} id="secret" key={promptInstanceKey(capturePromptOwner('secret', overlay.secret))}>
         <SecretPrompt
           cols={cols}
           envVar={overlay.secret.envVar}
-          onSubmit={onSecretSubmit}
+          onSubmit={guard('secret', onSecretSubmit)}
           prompt={overlay.secret.prompt}
           t={theme}
         />
@@ -183,25 +199,33 @@ export function PromptZone({
     )
   }
 
-  if (overlay.vaultUnlock) {
+  if (active === 'vaultUnlock' && overlay.vaultUnlock) {
     return (
-      <PromptCell cols={cols} id="vault-unlock">
+      <PromptCell
+        cols={cols}
+        id="vault-unlock"
+        key={promptInstanceKey(capturePromptOwner('vaultUnlock', overlay.vaultUnlock))}
+      >
         <VaultUnlockPrompt
           cols={cols}
           displayName={overlay.vaultUnlock.displayName}
-          onSubmit={onVaultUnlockSubmit}
+          onSubmit={guard('vaultUnlock', onVaultUnlockSubmit)}
           t={theme}
         />
       </PromptCell>
     )
   }
 
-  if (overlay.vaultSaveLogin) {
+  if (active === 'vaultSaveLogin' && overlay.vaultSaveLogin) {
     return (
-      <PromptCell cols={cols} id="vault-save-login">
+      <PromptCell
+        cols={cols}
+        id="vault-save-login"
+        key={promptInstanceKey(capturePromptOwner('vaultSaveLogin', overlay.vaultSaveLogin))}
+      >
         <VaultSaveLoginPrompt
           cols={cols}
-          onReady={onVaultSaveLoginSubmit}
+          onReady={guard('vaultSaveLogin', onVaultSaveLoginSubmit)}
           site={overlay.vaultSaveLogin.site}
           t={theme}
         />
@@ -209,13 +233,17 @@ export function PromptZone({
     )
   }
 
-  if (overlay.vaultCode) {
+  if (active === 'vaultCode' && overlay.vaultCode) {
     return (
-      <PromptCell cols={cols} id="vault-code">
+      <PromptCell
+        cols={cols}
+        id="vault-code"
+        key={promptInstanceKey(capturePromptOwner('vaultCode', overlay.vaultCode))}
+      >
         <VaultCodePrompt
           cols={cols}
           hint={overlay.vaultCode.hint}
-          onSubmit={onVaultCodeSubmit}
+          onSubmit={guard('vaultCode', onVaultCodeSubmit)}
           site={overlay.vaultCode.site}
           t={theme}
         />

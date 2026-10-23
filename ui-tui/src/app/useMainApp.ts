@@ -24,7 +24,6 @@ import { type GatewayClient } from '../gatewayClient.js'
 import type { SubagentListResponse } from '../gatewayTypes.js'
 import type {
   AnyGatewayEvent,
-  ClarifyLockResponse,
   ConfigSetResponse,
   SessionActiveListResponse,
   SessionCloseResponse,
@@ -40,13 +39,6 @@ import { DEFAULT_VOICE_RECORD_KEY, isMac, type ParsedVoiceRecordKey } from '../l
 import { createResizeCoalescer } from '../lib/resizeCoalescer.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
-import {
-  buildToolTrailLine,
-  clarifyAnswerText,
-  formatAbandonedClarify,
-  sameToolTrailGroup,
-  toolTrailLabel
-} from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { onUserWidgets } from '../sdk/userWidgets.js'
 import type { Msg, PanelSection, SlashCatalog } from '../types.js'
@@ -63,13 +55,13 @@ import { $overlayState, hasSensitivePrompt, patchOverlayState } from './overlayS
 import { $goodVibesTick } from './petFlashStore.js'
 import { applyProcessSnapshot, type ProcessEntry } from './processRoster.js'
 import { scrollWithSelectionBy } from './scroll.js'
-import { respondToServerRequest } from './serverRequestStore.js'
 import { turnController } from './turnController.js'
-import { patchTurnState, useTurnSelector } from './turnStore.js'
+import { useTurnSelector } from './turnStore.js'
 import { $uiState, getUiState, patchUiState } from './uiStore.js'
 import { useBatteryPoll } from './useBatteryPoll.js'
 import { useComposerState } from './useComposerState.js'
 import { useConfigSync } from './useConfigSync.js'
+import { useDecisionActions } from './useDecisionActions.js'
 import { shouldDetachEditedHistoryInput, useInputHandlers } from './useInputHandlers.js'
 import { useLongRunToolCharms } from './useLongRunToolCharms.js'
 import {
@@ -87,9 +79,6 @@ import { useSubmission } from './useSubmission.js'
 const BRACKET_PASTE_ON = '\x1b[?2004h'
 const BRACKET_PASTE_OFF = '\x1b[?2004l'
 const MAX_HEIGHT_CACHE_BUCKETS = 12
-
-const clarifyQuestionCountLabel = (count: number) =>
-  t(count === 1 ? 'session.main.clarifyQuestionsOne' : 'session.main.clarifyQuestionsOther', String(count))
 
 const statusColorOf = (status: string, t: { error: string; muted: string; ok: string; warn: string }) => {
   if (status === 'ready') {
@@ -740,96 +729,16 @@ export function useMainApp(gw: GatewayClient) {
     }
   }, [rpc, stdout, ui.sid])
 
-  const cancelClarify = useCallback(() => {
-    const clarify = overlay.clarify
-
-    if (!clarify) {
-      return
-    }
-
-    const label = toolTrailLabel('clarify')
-
-    turnController.turnTools = turnController.turnTools.filter(line => !sameToolTrailGroup(label, line))
-    patchTurnState({ turnTrail: turnController.turnTools })
-
-    if (!respondToServerRequest(clarify.requestId, {})) {
-      // The request already expired (request.cancel raced the keystroke): nothing to answer.
-      patchOverlayState({ clarify: null })
-
-      return
-    }
-
-    // Esc / Ctrl+C cancel: persist the question as a system line (not a
-    // transient "prompt cancelled" flash) so the prompt survives on screen as
-    // standard output, matching the timeout path.
-    appendMessage({
-      role: 'system',
-      text: formatAbandonedClarify(clarify.questions, clarify.answers ?? {}, 'cancelled')
-    })
-    patchOverlayState({ clarify: null })
-  }, [appendMessage, overlay.clarify])
-
-  // Lock one answer of a batch clarify (`clarify.lock` RPC). The overlay stays
-  // up until the server reports no remaining questions — the final lock
-  // resolves the server request and the turn continues.
-  const answerClarifyQuestion = useCallback(
-    (qid: string, answer: string) => {
-      const clarify = overlay.clarify
-
-      if (!clarify) {
-        return
-      }
-
-      rpc<ClarifyLockResponse>('clarify.lock', {
-        answer: answer.trim() ? answer : null,
-        question_id: qid,
-        request_id: clarify.requestId
-      }).then(r => {
-        if (!r) {
-          return
-        }
-
-        const answers = { ...(clarify.answers ?? {}), [qid]: answer }
-
-        if (r.status === 'expired') {
-          patchOverlayState({ clarify: null })
-
-          return
-        }
-
-        if ((r.remaining ?? []).length > 0) {
-          patchOverlayState({ clarify: { ...clarify, answers } })
-
-          return
-        }
-
-        // Batch complete: persist the whole Q&A set as one user-visible block.
-        const label = toolTrailLabel('clarify')
-
-        turnController.turnTools = turnController.turnTools.filter(line => !sameToolTrailGroup(label, line))
-        patchTurnState({ turnTrail: turnController.turnTools })
-        turnController.persistedToolLabels.add(label)
-        appendMessage({
-          kind: 'trail',
-          role: 'system',
-          text: '',
-          tools: [buildToolTrailLine('clarify', clarifyQuestionCountLabel(clarify.questions.length))]
-        })
-        appendMessage({
-          role: 'user',
-          text: clarify.questions
-            .map(
-              q =>
-                `${q.question} → ${answers[q.qid]?.trim() ? clarifyAnswerText(answers[q.qid]!, q.multiSelect) : t('session.main.skipped')}`
-            )
-            .join('\n')
-        })
-        patchUiState({ status: 'running…' })
-        patchOverlayState({ clarify: null })
-      })
-    },
-    [appendMessage, overlay.clarify, rpc]
-  )
+  const {
+    answerApproval,
+    answerClarifyQuestion,
+    cancelClarify,
+    answerSudo,
+    answerSecret,
+    answerVaultUnlock,
+    answerVaultSaveLogin,
+    answerVaultCode
+  } = useDecisionActions(overlay, rpc, appendMessage, sys)
 
   sysRef.current = sys
 
@@ -1102,138 +1011,6 @@ export function useMainApp(gw: GatewayClient) {
   )
 
   slashRef.current = slash
-
-  // Answer a server→client request by id; the card closes either way (an
-  // expired request has nothing left to answer).
-  const respondWith = useCallback((requestId: string, result: Record<string, unknown>, done: () => void) => {
-    respondToServerRequest(requestId, result)
-    done()
-  }, [])
-
-  const answerApproval = useCallback(
-    (choice: string) => {
-      if (!overlay.approval) {
-        return
-      }
-
-      respondWith(overlay.approval.requestId, { choice }, () => {
-        patchOverlayState({ approval: null })
-        patchTurnState({
-          outcome: choice === 'deny' ? t('session.approval.denied') : t('session.approval.approved', choice)
-        })
-        patchUiState({ status: 'running…' })
-      })
-    },
-    [overlay.approval, respondWith]
-  )
-
-  const answerSudo = useCallback(
-    (pw: string) => {
-      if (!overlay.sudo) {
-        return
-      }
-
-      const requestId = overlay.sudo.requestId
-
-      if (!pw) {
-        patchOverlayState({ sudo: null })
-      }
-
-      respondWith(requestId, { value: pw }, () => {
-        patchOverlayState({ sudo: null })
-        patchUiState({ status: 'running…' })
-      })
-    },
-    [overlay.sudo, respondWith]
-  )
-
-  const answerSecret = useCallback(
-    (value: string) => {
-      if (!overlay.secret) {
-        return
-      }
-
-      const requestId = overlay.secret.requestId
-
-      if (!value) {
-        patchOverlayState({ secret: null })
-      }
-
-      respondWith(requestId, { value }, () => {
-        patchOverlayState({ secret: null })
-        patchUiState({ status: 'running…' })
-      })
-    },
-    [overlay.secret, respondWith]
-  )
-
-  const answerVaultUnlock = useCallback(
-    (password: string) => {
-      if (!overlay.vaultUnlock) {
-        return
-      }
-
-      const requestId = overlay.vaultUnlock.requestId
-
-      if (!password) {
-        patchOverlayState({ vaultUnlock: null })
-      }
-
-      respondWith(requestId, { value: password }, () => {
-        patchOverlayState({ vaultUnlock: null })
-        patchUiState({ status: 'running…' })
-      })
-    },
-    [overlay.vaultUnlock, respondWith]
-  )
-
-  const answerVaultSaveLogin = useCallback(
-    (identifier: string, password: string) => {
-      if (!overlay.vaultSaveLogin) {
-        return
-      }
-
-      const requestId = overlay.vaultSaveLogin.requestId
-
-      // Either step left empty declines (CLI parity): an empty value resolves the
-      // tool's wait now instead of at its 180s deadline. The pair goes only to
-      // the encrypted vault, never to the transcript or the model.
-      if (!identifier || !password) {
-        patchOverlayState({ vaultSaveLogin: null })
-      }
-
-      return respondWith(
-        requestId,
-        { value: identifier && password ? JSON.stringify({ identifier, password }) : '' },
-        () => {
-          patchOverlayState({ vaultSaveLogin: null })
-          patchUiState({ status: 'running…' })
-        }
-      )
-    },
-    [overlay.vaultSaveLogin, respondWith]
-  )
-
-  const answerVaultCode = useCallback(
-    (code: string) => {
-      if (!overlay.vaultCode) {
-        return
-      }
-
-      const requestId = overlay.vaultCode.requestId
-      const value = code.trim()
-
-      if (!value) {
-        patchOverlayState({ vaultCode: null })
-      }
-
-      respondWith(requestId, { value }, () => {
-        patchOverlayState({ vaultCode: null })
-        patchUiState({ status: 'running…' })
-      })
-    },
-    [overlay.vaultCode, respondWith]
-  )
 
   const onModelSelect = useCallback((value: string) => {
     patchOverlayState({ modelPicker: false })

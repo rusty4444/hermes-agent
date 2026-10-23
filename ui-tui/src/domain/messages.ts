@@ -22,12 +22,13 @@ export const userDisplay = (text: string) => {
 export const isInternalJobNoticeKind = (kind: unknown): boolean =>
   kind === 'async_delegation_complete' || kind === 'process_complete'
 
-export const toTranscriptMessages = (rows: unknown): Msg[] => {
+export const toTranscriptMessages = (rows: unknown, conversationId?: null | string): Msg[] => {
   if (!Array.isArray(rows)) {
     return []
   }
 
   const out: Msg[] = []
+  const occurrences = new Map<string, number>()
   let pending: string[] = []
 
   for (const row of rows) {
@@ -80,6 +81,19 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
     if (isInternalJobNoticeKind(display_kind)) {
       const meta = (row as TranscriptRow).display_metadata
       const count = meta && typeof meta.task_count === 'number' ? meta.task_count : undefined
+      const backendId = typeof meta?.notice_id === 'string' ? meta.notice_id : undefined
+      const recordId = (row as TranscriptRow).row_id
+      const hasRecordId = typeof recordId === 'string' || typeof recordId === 'number'
+      const authored = hasRecordId ? ['row', recordId] : createdAt !== undefined ? ['time', createdAt] : null
+      const fallback = JSON.stringify([conversationId ?? null, display_kind, authored, hasRecordId ? null : text])
+      const occurrence = occurrences.get(fallback) ?? 0
+      occurrences.set(fallback, occurrence + 1)
+
+      const id =
+        backendId ??
+        createHash('sha256')
+          .update(JSON.stringify([fallback, hasRecordId ? 0 : occurrence]))
+          .digest('hex')
 
       const label =
         display_kind === 'process_complete'
@@ -99,9 +113,14 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
         text: typeof meta?.display_text === 'string' ? meta.display_text : label,
         ...(createdAt !== undefined && { createdAt }),
         jobNotice: {
-          // Older *typed* rows have no notice_id. A content identity survives
-          // hydration/virtualization without confusing two sessions' row ids.
-          id: typeof meta?.notice_id === 'string' ? meta.notice_id : createHash('sha256').update(text).digest('hex'),
+          // Opaque producer IDs stay intact; presentation keys qualify ownership.
+          id,
+          ...(conversationId ? { key: JSON.stringify([conversationId, display_kind, id]) } : {}),
+          ...(meta ? { metadata: meta } : {}),
+          // Equal unidentified arrivals are not proof of replay. Occurrence keys
+          // preserve snapshot multiplicity, but indistinguishable legacy pages
+          // cannot promise perfect identity without producer information.
+          ...(backendId === undefined && authored === null ? { replayable: false } : {}),
           body: text,
           hasIssues: meta?.has_issues === true || (typeof meta?.failed_count === 'number' && meta.failed_count > 0)
         }
@@ -128,20 +147,40 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
 export const dedupeJobNotices = (items: Msg[]): Msg[] => {
   const seen = new Set<string>()
 
-  return items.filter(msg => {
+  return items.flatMap(msg => {
     if (!msg.jobNotice) {
-      return true
+      return [msg]
     }
 
-    if (seen.has(msg.jobNotice.id)) {
-      return false
+    const key = jobNoticeKey(msg.jobNotice)
+
+    if (msg.jobNotice.replayable === false) {
+      // Preserve separate unidentifiable arrivals, including their independent
+      // expansion controls. This local occurrence cannot identify an unseen
+      // legacy page/replay with no authoring fields; never drop its report.
+      let unique = key
+      let occurrence = 0
+
+      while (seen.has(unique)) {
+        unique = JSON.stringify([key, 'occurrence', ++occurrence])
+      }
+
+      seen.add(unique)
+
+      return [unique === key ? msg : { ...msg, jobNotice: { ...msg.jobNotice, key: unique } }]
     }
 
-    seen.add(msg.jobNotice.id)
+    if (seen.has(key)) {
+      return []
+    }
 
-    return true
+    seen.add(key)
+
+    return [msg]
   })
 }
+
+export const jobNoticeKey = (notice: NonNullable<Msg['jobNotice']>): string => notice.key ?? notice.id
 
 export const fmtDuration = (ms: number) => {
   const t = Math.max(0, Math.floor(ms / 1000))
@@ -153,6 +192,7 @@ export const fmtDuration = (ms: number) => {
 }
 
 interface TranscriptRow {
+  row_id?: number | string
   context?: string
   display_kind?: string
   display_metadata?: { task_count?: number; [key: string]: unknown }

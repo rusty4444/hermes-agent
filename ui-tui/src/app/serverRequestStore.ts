@@ -6,25 +6,41 @@ import type { ServerRequest } from '@hermes/shared/json-rpc-channel'
 // same card. Module-level, like the overlay store: the gateway client and
 // the Ink handlers share one instance per process.
 const open = new Map<string, ServerRequest>()
+const responding = new Set<ServerRequest>()
+
+export const getServerRequest = (id: string): ServerRequest | undefined => open.get(id)
 
 export function rememberServerRequest(request: ServerRequest): void {
   open.set(request.id, request)
 }
 
-export function forgetServerRequest(id: string): void {
-  open.delete(id)
+export function forgetServerRequest(id: string, expected = open.get(id)): void {
+  if (open.get(id) === expected) {
+    open.delete(id)
+  }
 }
 
 /** Answer request `id` and forget it. False when nothing is open under that id (expired / already answered). */
-export function respondToServerRequest(id: string, result: Record<string, unknown>): boolean {
+export function respondToServerRequest(id: string, result: Record<string, unknown>, expected = open.get(id)): boolean {
   const request = open.get(id)
 
-  if (!request) {
+  if (!request || request !== expected || responding.has(request)) {
     return false
   }
 
-  open.delete(id)
-  request.respond(result)
+  // Retain a failed response for retry. Reentrant callbacks may install a new
+  // instance under the same ID; never remove that replacement on completion.
+  responding.add(request)
+
+  try {
+    request.respond(result)
+
+    if (open.get(id) === request) {
+      open.delete(id)
+    }
+  } finally {
+    responding.delete(request)
+  }
 
   return true
 }
@@ -35,4 +51,5 @@ export function hasOpenServerRequest(id: string): boolean {
 
 export function resetServerRequestsForTests(): void {
   open.clear()
+  responding.clear()
 }

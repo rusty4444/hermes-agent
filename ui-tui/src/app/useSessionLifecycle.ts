@@ -58,18 +58,21 @@ export const writeActiveSessionFile = (sessionId: null | string, file = process.
   }
 }
 
-export const liveSessionInflightMessages = (inflight?: null | InflightTurn): Msg[] => {
+export const liveSessionInflightMessages = (inflight?: null | InflightTurn, conversationId?: null | string): Msg[] => {
   const user = String(inflight?.user ?? '')
 
   return user.trim()
-    ? toTranscriptMessages([
-        {
-          role: 'user',
-          text: user,
-          ...(inflight?.display_kind ? { display_kind: inflight.display_kind } : {}),
-          ...(inflight?.display_metadata ? { display_metadata: inflight.display_metadata } : {})
-        }
-      ])
+    ? toTranscriptMessages(
+        [
+          {
+            role: 'user',
+            text: user,
+            ...(inflight?.display_kind ? { display_kind: inflight.display_kind } : {}),
+            ...(inflight?.display_metadata ? { display_metadata: inflight.display_metadata } : {})
+          }
+        ],
+        conversationId
+      )
     : []
 }
 
@@ -337,7 +340,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
           resetSession()
           setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
-          const transcript = [...toTranscriptMessages(r.messages), ...liveSessionInflightMessages(r.inflight)]
+
+          const transcript = [
+            ...toTranscriptMessages(r.messages, storedSid),
+            ...liveSessionInflightMessages(r.inflight, storedSid)
+          ]
+
           setHistoryItems(info ? [introMsg(info), ...transcript] : transcript)
           writeActiveSessionFile(storedSid)
           patchUiState({
@@ -399,7 +407,10 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             resetSession()
             setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
 
-            const resumed = [...toTranscriptMessages(r.messages), ...liveSessionInflightMessages(r.inflight)]
+            const resumed = [
+              ...toTranscriptMessages(r.messages, storedSid),
+              ...liveSessionInflightMessages(r.inflight, storedSid)
+            ]
 
             setHistoryItems(info ? [introMsg(info), ...resumed] : resumed)
             writeActiveSessionFile(storedSid)

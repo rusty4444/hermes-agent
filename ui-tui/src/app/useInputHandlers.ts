@@ -1,4 +1,5 @@
 import { forceRedraw, useInput } from '@hermes/ink'
+import { useStore } from '@nanostores/react'
 import { useEffect, useRef } from 'react'
 
 import { DASHBOARD_TUI_MODE } from '../config/env.js'
@@ -22,11 +23,14 @@ import {
 } from './interfaces.js'
 import {
   $isBlocked,
+  $overlayState,
+  getActivePromptKey,
   getOverlayState,
   hasSensitivePrompt,
   patchOverlayState,
   SENSITIVE_PROMPTS
 } from './overlayStore.js'
+import { capturePromptOwner, clearOwnedPrompt, ownsPrompt, type PromptOwner } from './promptOwnership.js'
 import { respondToServerRequest } from './serverRequestStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -187,15 +191,28 @@ const dismissedNotice = <K extends SensitivePrompt>(key: K, req: NonNullable<Ove
 export function dismissSensitivePrompt(
   overlay: Pick<OverlayState, SensitivePrompt>,
   rpc: GatewayRpc,
-  sys: (text: string) => void
+  sys: (text: string) => void,
+  visibleOwner?: PromptOwner | null
 ) {
   for (const key of SENSITIVE_PROMPTS) {
     const req = overlay[key]
 
     if (req) {
-      patchOverlayState({ [key]: null })
-      sys(dismissedNotice(key, req))
-      respondToServerRequest(req.requestId, { value: '' })
+      const owner = visibleOwner ?? capturePromptOwner(key, req)
+
+      if (!ownsPrompt(owner)) {
+        return
+      }
+
+      try {
+        respondToServerRequest(req.requestId, { value: '' }, owner.request)
+
+        if (clearOwnedPrompt(owner)) {
+          sys(dismissedNotice(key, req))
+        }
+      } catch {
+        sys('error: could not answer request; please retry')
+      }
 
       return
     }
@@ -210,6 +227,13 @@ export function shouldDetachEditedHistoryInput(historyIdx: null | number, histor
 
 export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   const { actions, composer, gateway, terminal, voice, wheelStep } = ctx
+  const renderedOverlay = useStore($overlayState)
+  const renderedPromptKey = getActivePromptKey(renderedOverlay)
+
+  const visiblePrompt = renderedPromptKey
+    ? capturePromptOwner(renderedPromptKey, renderedOverlay[renderedPromptKey])
+    : null
+
   const { actions: cActions, refs: cRefs, state: cState } = composer
 
   const pagerPageSize = Math.max(5, (terminal.stdout?.rows ?? 24) - 6)
@@ -249,22 +273,33 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   const cancelOverlayFromCtrlC = () => {
     const overlay = getOverlayState()
+    const active = getActivePromptKey(overlay)
 
-    if (overlay.clarify) {
+    if (active && !ownsPrompt(visiblePrompt)) {
+      return
+    }
+
+    if (active === 'clarify') {
       return actions.cancelClarify()
     }
 
-    if (overlay.approval) {
-      respondToServerRequest(overlay.approval.requestId, { choice: 'deny' })
-      patchOverlayState({ approval: null })
-      patchTurnState({ outcome: t('session.approval.denied') })
+    if (active === 'approval' && overlay.approval) {
+      try {
+        respondToServerRequest(overlay.approval.requestId, { choice: 'deny' }, visiblePrompt?.request)
+
+        if (clearOwnedPrompt(visiblePrompt)) {
+          patchTurnState({ outcome: t('session.approval.denied') })
+        }
+      } catch {
+        actions.sys('error: could not answer request; please retry')
+      }
 
       return
     }
 
     // The connection card has no local dismissal: the operation belongs to the running turn, so
     // ending the turn is what settles it (as `interrupt`) and closes the card.
-    if (overlay.connection) {
+    if (active === 'connection' && overlay.connection) {
       const sid = getUiState().sid
 
       if (!sid) {
@@ -279,8 +314,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       })
     }
 
-    if (hasSensitivePrompt(overlay)) {
-      return dismissSensitivePrompt(overlay, gateway.rpc, actions.sys)
+    if (active && SENSITIVE_PROMPTS.some(key => key === active)) {
+      return dismissSensitivePrompt(overlay, gateway.rpc, actions.sys, visiblePrompt)
     }
 
     if (overlay.modelPicker) {

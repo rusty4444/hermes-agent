@@ -141,6 +141,20 @@ export const hasPromptOpen = (overlay: OverlayState): boolean => PROMPT_KEYS.som
 
 export const getOverlayState = () => $overlayState.get()
 
+// Rendering and event-time decision admission must use the same priority.
+export const PROMPT_ZONE_KEYS = [
+  'approval',
+  'billing',
+  'subscription',
+  'connection',
+  'confirm',
+  'clarify',
+  ...SENSITIVE_PROMPTS
+] as const
+export type PromptKey = (typeof PROMPT_ZONE_KEYS)[number]
+export const getActivePromptKey = (overlay: OverlayState): PromptKey | undefined =>
+  overlay.agents || overlay.journey ? undefined : PROMPT_ZONE_KEYS.find(key => Boolean(overlay[key]))
+
 export const patchOverlayState = (next: Partial<OverlayState> | ((state: OverlayState) => OverlayState)) =>
   $overlayState.set(typeof next === 'function' ? next($overlayState.get()) : { ...$overlayState.get(), ...next })
 

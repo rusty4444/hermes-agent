@@ -5,6 +5,7 @@ import { useRef, useState } from 'react'
 
 import { $expandedJobNotices, toggleJobNotice } from '../app/internalJobNoticeStore.js'
 import { $isBlocked } from '../app/overlayStore.js'
+import { jobNoticeKey } from '../domain/messages.js'
 import { useT } from '../i18n/useT.js'
 import type { Theme } from '../theme.js'
 import type { Msg } from '../types.js'
@@ -16,7 +17,8 @@ export function InternalJobNotice({ msg, t }: { msg: Msg; t: Theme }) {
   const button = useRef<DOMElement | null>(null)
   const T = useT().chatBits.messageLine
   const notice = msg.jobNotice!
-  const open = expanded.has(notice.id)
+  const identity = jobNoticeKey(notice)
+  const open = expanded.has(identity)
 
   const handleKeyDown = (event: KeyboardEvent) => {
     // Decision overlays retain priority even before React re-renders this
@@ -33,7 +35,7 @@ export function InternalJobNotice({ msg, t }: { msg: Msg; t: Theme }) {
       getFocusManager(button.current!).blur()
     } else if (!event.shift && (event.key === 'return' || event.key === ' ')) {
       event.preventDefault()
-      toggleJobNotice(notice.id)
+      toggleJobNotice(identity)
     }
   }
 
@@ -50,7 +52,7 @@ export function InternalJobNotice({ msg, t }: { msg: Msg; t: Theme }) {
           event.stopImmediatePropagation()
 
           if (!$isBlocked.get()) {
-            toggleJobNotice(notice.id)
+            toggleJobNotice(identity)
           }
         }}
         onFocus={() => setFocused(true)}

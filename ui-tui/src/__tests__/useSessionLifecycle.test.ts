@@ -81,7 +81,13 @@ describe('live session activation in-flight state', () => {
         kind: 'event',
         role: 'system',
         text: 'Finished syncing the workspace',
-        jobNotice: { id: expect.any(String), body: inflight.user, hasIssues: false }
+        jobNotice: {
+          id: expect.any(String),
+          body: inflight.user,
+          hasIssues: false,
+          metadata: inflight.display_metadata,
+          replayable: false
+        }
       }
     ])
   })

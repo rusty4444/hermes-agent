@@ -19,7 +19,7 @@ import type { PanelSection } from '../../../types.js'
 import { applyConfiguredTuiTheme } from '../../createGatewayEventHandler.js'
 import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '../../interfaces.js'
 import { patchOverlayState } from '../../overlayStore.js'
-import { patchUiState } from '../../uiStore.js'
+import { getUiState, patchUiState } from '../../uiStore.js'
 import type { SlashCommand } from '../types.js'
 
 const TUI_SESSION_MODEL_RE = new RegExp(`(?:^|\\s)${TUI_SESSION_MODEL_FLAG}(?:\\s|$)`)
@@ -261,7 +261,7 @@ export const sessionCommands: SlashCommand[] = [
         .then(
           ctx.guarded<SessionCompressResponse>(r => {
             if (Array.isArray(r.messages)) {
-              const rows = toTranscriptMessages(r.messages)
+              const rows = toTranscriptMessages(r.messages, getUiState().storedSid || ctx.sid)
 
               ctx.transcript.setHistoryItems(r.info ? [introMsg(r.info), ...rows] : rows)
             }

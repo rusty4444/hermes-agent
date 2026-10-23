@@ -922,7 +922,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         // Only the backend can attach display_kind. A pasted marker has no
         // provenance and remains the human's ordinary (gold) prompt.
         if (isInternalJobNoticeKind(ev.payload?.display_kind)) {
-          for (const msg of toTranscriptMessages([{ role: 'user', ...ev.payload }])) {
+          for (const msg of toTranscriptMessages([{ role: 'user', ...ev.payload }], getUiState().storedSid || sid)) {
             appendMessage(msg)
           }
         }
