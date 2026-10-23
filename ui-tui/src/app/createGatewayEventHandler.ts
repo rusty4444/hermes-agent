@@ -8,7 +8,7 @@ import type { StreamDeltaPayload, SubagentStatus, Usage } from '@hermes/shared/g
 import { STARTUP_IMAGE, STARTUP_QUERY } from '../config/env.js'
 import { STREAM_BATCH_MS } from '../config/timing.js'
 import { buildSetupRequiredSections, setupRequiredTitle } from '../content/setup.js'
-import { toTranscriptMessages } from '../domain/messages.js'
+import { isInternalJobNoticeKind, toTranscriptMessages } from '../domain/messages.js'
 import type {
   AnyGatewayEvent,
   CommandsCatalogResponse,
@@ -921,7 +921,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       case 'message.start':
         // Only the backend can attach display_kind. A pasted marker has no
         // provenance and remains the human's ordinary (gold) prompt.
-        if (ev.payload?.display_kind === 'async_delegation_complete') {
+        if (isInternalJobNoticeKind(ev.payload?.display_kind)) {
           for (const msg of toTranscriptMessages([{ role: 'user', ...ev.payload }])) {
             appendMessage(msg)
           }

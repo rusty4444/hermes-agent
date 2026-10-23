@@ -13,6 +13,7 @@ import type { Msg } from '../types.js'
 
 import { reportSlashCommand } from './createSlashHandler.js'
 import type { ComposerActions, ComposerRefs, ComposerState, ComposerToken } from './interfaces.js'
+import { $isBlocked } from './overlayStore.js'
 import { findSlashCommand } from './slash/registry.js'
 import { submitPrompt } from './submissionCore.js'
 import { turnController } from './turnController.js'
@@ -254,7 +255,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
   const dispatchSubmission = useCallback(
     (full: string) => {
-      if (!full.trim()) {
+      if ($isBlocked.get() || !full.trim()) {
         return
       }
 
@@ -366,6 +367,12 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
   const submit = useCallback(
     (value: string) => {
+      // The still-mounted composer can receive Enter before the blocking
+      // prompt paints. Admit nothing (including completion/draft edits) then.
+      if ($isBlocked.get()) {
+        return
+      }
+
       if (composerState.completions.length) {
         const row = composerState.completions[composerState.compIdx]
 

@@ -1159,7 +1159,7 @@ def _run_prompt_submit(
     if not muted:
         # Reuse the persisted display provenance on the live path, too. Never infer an
         # internal origin from text: a human may quote the exact completion marker.
-        if display_kind == "async_delegation_complete" and isinstance(text, str):
+        if display_kind in {"async_delegation_complete", "process_complete"} and isinstance(text, str):
             _emit("message.start", sid, {
                 "text": text, "display_kind": display_kind, "display_metadata": display_metadata})
         else:

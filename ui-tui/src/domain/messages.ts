@@ -19,6 +19,9 @@ export const userDisplay = (text: string) => {
   return t('libText.messages.longMessage', prefix || t('libText.messages.messageFallback'))
 }
 
+export const isInternalJobNoticeKind = (kind: unknown): boolean =>
+  kind === 'async_delegation_complete' || kind === 'process_complete'
+
 export const toTranscriptMessages = (rows: unknown): Msg[] => {
   if (!Array.isArray(rows)) {
     return []
@@ -74,7 +77,7 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       continue
     }
 
-    if (display_kind === 'async_delegation_complete' || display_kind === 'process_complete') {
+    if (isInternalJobNoticeKind(display_kind)) {
       const meta = (row as TranscriptRow).display_metadata
       const count = meta && typeof meta.task_count === 'number' ? meta.task_count : undefined
 
@@ -95,15 +98,13 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
         role: 'system',
         text: typeof meta?.display_text === 'string' ? meta.display_text : label,
         ...(createdAt !== undefined && { createdAt }),
-        ...(display_kind === 'async_delegation_complete' && {
-          jobNotice: {
-            // Older *typed* rows have no notice_id. A content identity survives
-            // hydration/virtualization without confusing two sessions' row ids.
-            id: typeof meta?.notice_id === 'string' ? meta.notice_id : createHash('sha256').update(text).digest('hex'),
-            body: text,
-            hasIssues: meta?.has_issues === true || (typeof meta?.failed_count === 'number' && meta.failed_count > 0)
-          }
-        })
+        jobNotice: {
+          // Older *typed* rows have no notice_id. A content identity survives
+          // hydration/virtualization without confusing two sessions' row ids.
+          id: typeof meta?.notice_id === 'string' ? meta.notice_id : createHash('sha256').update(text).digest('hex'),
+          body: text,
+          hasIssues: meta?.has_issues === true || (typeof meta?.failed_count === 'number' && meta.failed_count > 0)
+        }
       })
       pending = []
 

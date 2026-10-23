@@ -617,7 +617,7 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
         if text is not None:
             _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
                           "completion batch dispatch failed", display_kind=PROCESS_COMPLETE_DISPLAY_KIND,
-                          display_metadata={"display_text": batch.display_text(registry)})
+                          display_metadata=batch.display_metadata(registry, session.get("session_key") or sid))
     except Exception:
         for event, _text, claim in claimed:
             release_event_delivery(event, claim)

@@ -3,6 +3,8 @@ watch_match, watch_disabled, watch_overflow_*, async_delegation) into the
 ``[IMPORTANT: ...]`` / ``[ASYNC DELEGATION ...]`` text the CLI drain loop, gateway and
 TUI inject into the agent conversation."""
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
 from contextlib import suppress
@@ -34,6 +36,28 @@ class ProcessNotificationBatch:
 
     def display_text(self, registry) -> str:
         return process_completion_display_text([event for event, _text in self._live(registry)])
+
+    def display_metadata(self, registry, owner: str) -> dict:
+        """Trusted TUI presentation, separate from the model's verbatim report.
+
+        Process ids + producer start times survive checkpoint replay. Scope the
+        batch to its conversation so identical reports in another session do not
+        inherit the same expansion state.
+        """
+        events = [event for event, _text in self._live(registry)]
+        identity = sorted((str(event.get("session_id", "")), str(event.get("started_at", ""))) for event in events)
+        digest = hashlib.sha256(json.dumps([owner, identity]).encode()).hexdigest()
+        incomplete = any(event.get("output_cut") for event in events)
+        title = process_completion_display_text(events)
+        return {
+            "display_text": f"{title} · Incomplete output" if incomplete else title,
+            "notice_id": f"process:{digest}",
+            "has_issues": any(
+                event.get("exit_code") != 0
+                or (event.get("completion_reason") or "exited") not in {"exited", "already_exited"}
+                or bool(event.get("output_cut"))
+                for event in events),
+        }
 
 
 def group_process_notifications(notifications):

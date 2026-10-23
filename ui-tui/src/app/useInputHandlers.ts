@@ -1,5 +1,4 @@
 import { forceRedraw, useInput } from '@hermes/ink'
-import { useStore } from '@nanostores/react'
 import { useEffect, useRef } from 'react'
 
 import { DASHBOARD_TUI_MODE } from '../config/env.js'
@@ -21,7 +20,13 @@ import {
   type InputHandlerResult,
   type OverlayState
 } from './interfaces.js'
-import { $isBlocked, $overlayState, hasSensitivePrompt, patchOverlayState, SENSITIVE_PROMPTS } from './overlayStore.js'
+import {
+  $isBlocked,
+  getOverlayState,
+  hasSensitivePrompt,
+  patchOverlayState,
+  SENSITIVE_PROMPTS
+} from './overlayStore.js'
 import { respondToServerRequest } from './serverRequestStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -207,8 +212,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   const { actions, composer, gateway, terminal, voice, wheelStep } = ctx
   const { actions: cActions, refs: cRefs, state: cState } = composer
 
-  const overlay = useStore($overlayState)
-  const isBlocked = useStore($isBlocked)
   const pagerPageSize = Math.max(5, (terminal.stdout?.rows ?? 24) - 6)
   const scrollIdleTimer = useRef<null | ReturnType<typeof setTimeout>>(null)
 
@@ -245,6 +248,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
   }
 
   const cancelOverlayFromCtrlC = () => {
+    const overlay = getOverlayState()
+
     if (overlay.clarify) {
       return actions.cancelClarify()
     }
@@ -423,6 +428,10 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
   useInput((ch, key, event) => {
     const live = getUiState()
+    // Store updates precede React's overlay commit. Main-composer shortcuts
+    // must yield immediately, without consuming the decision prompt's keys.
+    const overlay = getOverlayState()
+    const isBlocked = $isBlocked.get()
 
     if (key.escape) {
       // Escape-configured voice bindings (ctrl/alt/super+escape PTT) must win

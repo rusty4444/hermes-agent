@@ -37,23 +37,6 @@ declare module '@hermes/ink' {
 
   export type InputHandler = (input: string, key: Key, event: InputEvent) => void
 
-  /** Opaque native host node accepted by the focus API. */
-  export interface DOMElement {
-    readonly nodeName: string
-  }
-  export interface KeyboardEvent {
-    readonly key: string
-    readonly ctrl: boolean
-    readonly shift: boolean
-    readonly meta: boolean
-    readonly superKey: boolean
-    readonly fn: boolean
-    readonly isPasted: boolean
-    preventDefault(): void
-    stopImmediatePropagation(): void
-  }
-  export function getFocusManager(node: DOMElement): { blur(): void }
-
   export type FrameEvent = {
     readonly durationMs: number
     readonly phases?: {
