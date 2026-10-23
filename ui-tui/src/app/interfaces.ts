@@ -99,7 +99,11 @@ export interface CompletionItem {
 }
 
 export interface GatewayRpc {
-  <T extends RpcResult = RpcResult>(method: string, params?: Record<string, unknown>): Promise<null | T>
+  <T extends RpcResult = RpcResult>(
+    method: string,
+    params?: Record<string, unknown>,
+    isCurrent?: () => boolean
+  ): Promise<null | T>
 }
 
 export interface GatewayServices {

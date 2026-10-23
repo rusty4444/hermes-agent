@@ -154,10 +154,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
   // Plugin on_session_finalize text comes back on the close result and is shown as system lines (never a
   // model turn). `deferMessages`: the caller resets the transcript next and shows them itself afterwards.
   const closeSession = useCallback(
-    async (targetSid?: null | string, deferMessages = false) => {
-      const closed = targetSid ? await rpc<SessionCloseResponse>('session.close', { session_id: targetSid }) : null
+    async (targetSid?: null | string, deferMessages = false, isCurrent?: () => boolean) => {
+      const closed = targetSid
+        ? await rpc<SessionCloseResponse>('session.close', { session_id: targetSid }, isCurrent)
+        : null
 
-      if (!deferMessages) {
+      if (!deferMessages && (!isCurrent || isCurrent())) {
         closed?.messages?.forEach(message => sys(message))
       }
 
@@ -222,13 +224,14 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
   const startNewSession = useCallback(
     async (msg?: string, title?: string, keepCurrent = false) => {
       const transition = adoption.begin()
+      const isCurrent = () => adoption.isCurrent(transition)
 
       try {
         if (!adoption.owns(transition)) {
           return null
         }
 
-        const setup = await rpc<SetupStatusResponse>('setup.status', {})
+        const setup = await rpc<SetupStatusResponse>('setup.status', {}, isCurrent)
 
         if (!adoption.owns(transition)) {
           return null
@@ -241,17 +244,31 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           return null
         }
 
+        // No documented legacy fallback: unsupported, failed and malformed
+        // setup all fail closed before closing or creating any session.
+        if (typeof setup?.provider_configured !== 'boolean') {
+          if (setup) {
+            sys(`error: ${t('session.common.invalidResponse', 'setup.status')}`)
+          }
+
+          return null
+        }
+
         const previousSid = getUiState().sid
-        const closed = keepCurrent ? null : await closeSession(previousSid, true)
+        const closed = keepCurrent ? null : await closeSession(previousSid, true, isCurrent)
 
         if (!adoption.owns(transition)) {
           return null
         }
 
-        const r = await rpc<SessionCreateResponse>('session.create', {
-          cols: colsRef.current,
-          ...(STARTUP_WORKSPACE_CWD ? { cwd: STARTUP_WORKSPACE_CWD } : {})
-        })
+        const r = await rpc<SessionCreateResponse>(
+          'session.create',
+          {
+            cols: colsRef.current,
+            ...(STARTUP_WORKSPACE_CWD ? { cwd: STARTUP_WORKSPACE_CWD } : {})
+          },
+          isCurrent
+        )
 
         if (!adoption.owns(transition)) {
           return null
@@ -269,13 +286,13 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         const info = r.info ? { ...r.info, stored_session_id: storedSid } : null
         const requestedTitle = title?.trim() ?? ''
 
-        const prompts = adoption.adopt(transition, r)
+        const adopted = adoption.adopt(transition, r)
 
-        if (!prompts) {
+        if (!adopted) {
           return null
         }
 
-        resetSessionState(prompts)
+        resetSessionState(adopted.prompts)
         composerActions.setComposerTokens([])
         setSessionStartedAt(Date.now())
 
@@ -289,7 +306,9 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         })
 
         if (info) {
-          setHistoryItems([introMsg(info)])
+          setHistoryItems([introMsg(info), ...adopted.messages])
+        } else if (adopted.messages.length) {
+          setHistoryItems(adopted.messages)
         }
 
         if (info?.credential_warning) {
@@ -308,12 +327,16 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         closed?.messages?.forEach(message => sys(message))
 
         if (requestedTitle) {
-          rpc<SessionTitleResponse>('session.title', {
-            session_id: r.session_id,
-            title: requestedTitle
-          })
+          rpc<SessionTitleResponse>(
+            'session.title',
+            {
+              session_id: r.session_id,
+              title: requestedTitle
+            },
+            isCurrent
+          )
             .then(result => {
-              if (!result || getUiState().sid !== r.session_id) {
+              if (!result || !isCurrent() || getUiState().sid !== r.session_id) {
                 return
               }
 
@@ -323,7 +346,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               sys(`${t('session.lifecycle.sessionTitleSet', nextTitle)}${suffix}`)
             })
             .catch((err: unknown) => {
-              if (getUiState().sid !== r.session_id) {
+              if (!isCurrent() || getUiState().sid !== r.session_id) {
                 return
               }
 
@@ -335,6 +358,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         signalFreshSessionBoundary(previousSid, r.session_id, onFreshSessionStarted)
 
         return r.session_id
+      } catch (error) {
+        if (adoption.owns(transition)) {
+          sys(`error: ${error instanceof Error ? error.message : String(error)}`)
+        }
+
+        return null
       } finally {
         adoption.finish(transition)
       }
@@ -373,6 +402,8 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       const transition = adoption.begin()
 
       if (!adoption.owns(transition)) {
+        adoption.finish(transition)
+
         return
       }
 
@@ -407,15 +438,15 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             ...liveSessionInflightMessages(r.inflight, storedSid)
           ]
 
-          const prompts = adoption.adopt(transition, r)
+          const adopted = adoption.adopt(transition, r)
 
-          if (!prompts) {
+          if (!adopted) {
             return
           }
 
-          resetSessionState(prompts)
+          resetSessionState(adopted.prompts)
           setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
-          setHistoryItems(info ? [introMsg(info), ...transcript] : transcript)
+          setHistoryItems([...(info ? [introMsg(info)] : []), ...transcript, ...adopted.messages])
           writeActiveSessionFile(storedSid)
           patchUiState({
             busy: running,
@@ -449,16 +480,20 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   const resumeById = useCallback(
     async (id: string) => {
+      const previousStatus = getUiState().status
       const transition = adoption.begin()
+      const isCurrent = () => adoption.isCurrent(transition)
 
       if (!adoption.owns(transition)) {
+        adoption.finish(transition)
+
         return
       }
 
       patchOverlayState({ sessions: false })
       patchUiState({ status: t('session.status.resuming') })
 
-      return rpc<SetupStatusResponse>('setup.status', {})
+      return rpc<SetupStatusResponse>('setup.status', {}, isCurrent)
         .then(setup => {
           if (!adoption.owns(transition)) {
             return
@@ -467,6 +502,16 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           if (setup?.provider_configured === false) {
             panel(setupRequiredTitle(), buildSetupRequiredSections())
             patchUiState({ status: t('session.status.setupRequired') })
+
+            return
+          }
+
+          if (typeof setup?.provider_configured !== 'boolean') {
+            if (setup) {
+              sys(`error: ${t('session.common.invalidResponse', 'setup.status')}`)
+            }
+
+            patchUiState({ status: previousStatus })
 
             return
           }
@@ -498,15 +543,15 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
                 ...liveSessionInflightMessages(r.inflight, storedSid)
               ]
 
-              const prompts = adoption.adopt(transition, r)
+              const adopted = adoption.adopt(transition, r)
 
-              if (!prompts) {
+              if (!adopted) {
                 return
               }
 
-              resetSessionState(prompts)
+              resetSessionState(adopted.prompts)
               setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
-              setHistoryItems(info ? [introMsg(info), ...resumed] : resumed)
+              setHistoryItems([...(info ? [introMsg(info)] : []), ...resumed, ...adopted.messages])
               writeActiveSessionFile(storedSid)
               patchUiState({
                 busy: running,
@@ -528,7 +573,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               cancelResumeScrollRef.current = scheduleResumeScrollToBottom(scrollRef)
 
               if (previousSid && previousSid !== r.session_id) {
-                void closeSession(previousSid)
+                void closeSession(previousSid, false, isCurrent)
               }
             })
             .catch((e: Error) => {
@@ -539,6 +584,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               sys(`error: ${e.message}`)
               patchUiState({ status: 'ready' })
             })
+        })
+        .catch((error: unknown) => {
+          if (adoption.owns(transition)) {
+            sys(`error: ${error instanceof Error ? error.message : String(error)}`)
+            patchUiState({ status: previousStatus })
+          }
         })
         .finally(() => adoption.finish(transition))
     },

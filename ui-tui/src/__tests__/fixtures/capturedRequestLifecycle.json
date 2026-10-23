@@ -1,0 +1,96 @@
+{
+  "captured_result": {
+    "info": {},
+    "message_count": 0,
+    "messages": [],
+    "messages_omitted": true,
+    "running": true,
+    "turn_started_at": null,
+    "session_id": "runtime-B",
+    "session_key": "durable-B",
+    "started_at": 1.0,
+    "status": "waiting",
+    "open_requests": [
+      {
+        "id": "srq-96a1afcdac00",
+        "method": "approval",
+        "params": {
+          "session_id": "runtime-B",
+          "command": "SNAPSHOT_OLD",
+          "description": "Synthetic"
+        }
+      }
+    ]
+  },
+  "old_frame": {
+    "jsonrpc": "2.0",
+    "id": "srq-96a1afcdac00",
+    "method": "approval",
+    "params": {
+      "session_id": "runtime-B",
+      "command": "SNAPSHOT_OLD",
+      "description": "Synthetic"
+    }
+  },
+  "cancel_frame": {
+    "jsonrpc": "2.0",
+    "method": "event",
+    "params": {
+      "type": "request.cancel",
+      "session_id": "runtime-B",
+      "payload": {
+        "id": "srq-96a1afcdac00",
+        "method": "approval",
+        "reason": "timeout"
+      }
+    }
+  },
+  "new_live_frame": {
+    "jsonrpc": "2.0",
+    "id": "srq-8348a096f0cc",
+    "method": "approval",
+    "params": {
+      "session_id": "runtime-B",
+      "command": "ACTUALLY_NEWER_LIVE",
+      "description": "Synthetic"
+    }
+  },
+  "backend_open_requests_before_fresh_action": [
+    {
+      "id": "srq-8348a096f0cc",
+      "method": "approval",
+      "params": {
+        "session_id": "runtime-B",
+        "command": "ACTUALLY_NEWER_LIVE",
+        "description": "Synthetic"
+      }
+    }
+  ],
+  "clarify": {
+    "frame": {
+      "jsonrpc": "2.0",
+      "id": "srq-8ddae6647f85",
+      "method": "clarify",
+      "params": {
+        "session_id": "runtime-A",
+        "questions": [
+          {
+            "qid": "q",
+            "question": "CURRENT_QUESTION",
+            "choices": ["One"]
+          }
+        ]
+      }
+    },
+    "remaining": [],
+    "answered": true,
+    "result": {
+      "answers": {
+        "q": "One"
+      },
+      "outcome": "submitted"
+    },
+    "cancel_emitted": false
+  },
+  "provider": "production _live_session_payload + server_requests registry; barrier at pending_connection lookup after snapshot; no transport reply inversion"
+}

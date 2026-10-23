@@ -49,7 +49,7 @@ export function capturePromptOwner(
 }
 
 export function ownsPrompt(owner: PromptOwner | null, completion = false): owner is PromptOwner {
-  if (!owner || $sessionAdopting.get() || getUiState().sid !== owner.sessionId) {
+  if (!owner || (!completion && $sessionAdopting.get()) || getUiState().sid !== owner.sessionId) {
     return false
   }
 

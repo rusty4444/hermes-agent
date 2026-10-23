@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 import type { ClarifyLockResponse } from '../gatewayTypes.js'
 import { t } from '../i18n/runtime.js'
@@ -12,6 +12,7 @@ import {
 } from '../lib/text.js'
 import type { Msg } from '../types.js'
 
+import type { ServerPrompt } from './createServerRequestHandler.js'
 import type { GatewayRpc, OverlayState } from './interfaces.js'
 import { getActivePromptKey, getOverlayState, patchOverlayState } from './overlayStore.js'
 import { capturePromptOwner, clearOwnedPrompt, ownsPrompt, type PromptOwner } from './promptOwnership.js'
@@ -26,7 +27,8 @@ export function useDecisionActions(
   overlay: OverlayState,
   rpc: GatewayRpc,
   appendMessage: (msg: Msg) => void,
-  sys: (text: string) => void
+  sys: (text: string) => void,
+  onProgress?: (prompt: ServerPrompt, messages?: Msg[]) => void
 ) {
   const sid = useStore($uiSessionId)
 
@@ -40,6 +42,14 @@ export function useDecisionActions(
   )
 
   const locking = useRef(new WeakSet<object>())
+  const active = useRef(true)
+  useEffect(() => {
+    active.current = true
+
+    return () => {
+      active.current = false
+    }
+  }, [])
 
   const respondWith = (owner: PromptOwner | null, result: Record<string, unknown>, done?: () => void) => {
     if (!ownsPrompt(owner) || !owner.request) {
@@ -100,43 +110,44 @@ export function useDecisionActions(
     }
 
     locking.current.add(clarify)
-    rpc<ClarifyLockResponse>('clarify.lock', {
-      answer: answer.trim() ? answer : null,
-      question_id: qid,
-      request_id: clarify.requestId
-    })
+    const request = owner.request
+    const isCurrent = () => active.current && ownsPrompt(owner, true)
+    rpc<ClarifyLockResponse>(
+      'clarify.lock',
+      {
+        answer: answer.trim() ? answer : null,
+        question_id: qid,
+        request_id: clarify.requestId
+      },
+      isCurrent
+    )
       .then(r => {
-        if (!r || !ownsPrompt(owner, true)) {
+        if (!r || !active.current || !ownsPrompt(owner, true)) {
           return
         }
 
         const answers = { ...(clarify.answers ?? {}), [qid]: answer }
 
         if (r.status === 'expired') {
-          forgetServerRequest(clarify.requestId, owner.request)
+          forgetServerRequest(clarify.requestId, request)
+          onProgress?.({ request, overlay: { clarify: null } })
           clearOwnedPrompt(owner)
 
           return
         }
 
         if ((r.remaining ?? []).length > 0) {
-          patchOverlayState({ clarify: { ...clarify, answers } })
+          const next = { ...clarify, answers }
+          onProgress?.({ request, overlay: { clarify: next } })
+          patchOverlayState({ clarify: next })
 
           return
         }
 
-        forgetServerRequest(clarify.requestId, owner.request)
-
-        if (!clearOwnedPrompt(owner)) {
-          return
-        }
-
-        const label = toolTrailLabel('clarify')
-        turnController.turnTools = turnController.turnTools.filter(line => !sameToolTrailGroup(label, line))
-        patchTurnState({ turnTrail: turnController.turnTools })
-        turnController.persistedToolLabels.add(label)
+        forgetServerRequest(clarify.requestId, request)
         const count = clarify.questions.length
-        appendMessage({
+
+        const trail: Msg = {
           kind: 'trail',
           role: 'system',
           text: '',
@@ -146,8 +157,9 @@ export function useDecisionActions(
               t(count === 1 ? 'session.main.clarifyQuestionsOne' : 'session.main.clarifyQuestionsOther', String(count))
             )
           ]
-        })
-        appendMessage({
+        }
+
+        const answerMessage: Msg = {
           role: 'user',
           text: clarify.questions
             .map(
@@ -155,14 +167,27 @@ export function useDecisionActions(
                 `${q.question} → ${answers[q.qid]?.trim() ? clarifyAnswerText(answers[q.qid]!, q.multiSelect) : t('session.main.skipped')}`
             )
             .join('\n')
-        })
+        }
+
+        const messages = [trail, answerMessage]
+        onProgress?.({ request, overlay: { clarify: null } }, messages)
+
+        if (!clearOwnedPrompt(owner)) {
+          return
+        }
+
+        const label = toolTrailLabel('clarify')
+        turnController.turnTools = turnController.turnTools.filter(line => !sameToolTrailGroup(label, line))
+        patchTurnState({ turnTrail: turnController.turnTools })
+        turnController.persistedToolLabels.add(label)
+        messages.forEach(appendMessage)
 
         if (!getActivePromptKey(getOverlayState())) {
           patchUiState({ status: 'running…' })
         }
       })
       .catch(() => {
-        if (ownsPrompt(owner)) {
+        if (isCurrent()) {
           sys('error: could not answer question; please retry')
         }
       })

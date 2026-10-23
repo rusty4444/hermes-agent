@@ -518,10 +518,17 @@ export function useMainApp(gw: GatewayClient) {
   const rpc: GatewayRpc = useCallback(
     async <T extends Record<string, any> = Record<string, any>>(
       method: string,
-      params: Record<string, unknown> = {}
+      params: Record<string, unknown> = {},
+      isCurrent: () => boolean = () => true
     ) => {
       try {
-        const result = asRpcResult<T>(await gw.request<T>(method, params))
+        const raw = await gw.request<T>(method, params)
+
+        if (!isCurrent()) {
+          return null
+        }
+
+        const result = asRpcResult<T>(raw)
 
         if (result) {
           return result
@@ -529,7 +536,9 @@ export function useMainApp(gw: GatewayClient) {
 
         sys(`error: ${t('session.common.invalidResponse', method)}`)
       } catch (e) {
-        sys(`error: ${rpcErrorMessage(e)}`)
+        if (isCurrent()) {
+          sys(`error: ${rpcErrorMessage(e)}`)
+        }
       }
 
       return null
@@ -738,7 +747,7 @@ export function useMainApp(gw: GatewayClient) {
     answerVaultUnlock,
     answerVaultSaveLogin,
     answerVaultCode
-  } = useDecisionActions(overlay, rpc, appendMessage, sys)
+  } = useDecisionActions(overlay, rpc, appendMessage, sys, session.adoption.progress)
 
   sysRef.current = sys
 
