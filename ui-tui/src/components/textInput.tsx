@@ -1,6 +1,6 @@
 import type { InputEvent, Key } from '@hermes/ink'
 import * as Ink from '@hermes/ink'
-import { type MutableRefObject, useEffect, useMemo, useRef, useState } from 'react'
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { setInputSelection } from '../app/inputSelectionStore.js'
 import { highlightMask, highlightsStable } from '../domain/composerHighlights.js'
@@ -1317,7 +1317,21 @@ export function TextInput({
     commit(nextValue, nextCursor)
   }
 
+  const inputNode = useRef<Ink.DOMElement | null>(null)
+
+  const setInputNode = useCallback(
+    (node: Ink.DOMElement | null) => {
+      inputNode.current = node
+      boxRef(node)
+    },
+    [boxRef]
+  )
+
   const startMouseSelection = (next: number) => {
+    if (focus && inputNode.current) {
+      ink.getFocusManager(inputNode.current).blur()
+    }
+
     const c = snapPos(vRef.current, next)
 
     mouseAnchorRef.current = c
@@ -1733,6 +1747,7 @@ export function TextInput({
 
         e.stopImmediatePropagation?.()
         clearSel()
+        ink.getFocusManager(inputNode.current!).blur()
         const next = offsetAt(e)
         setCur(next)
         curRef.current = next
@@ -1744,6 +1759,7 @@ export function TextInput({
 
         // Right-click → copy active selection if any, otherwise paste.
         if (e.button === 2) {
+          ink.getFocusManager(inputNode.current!).blur()
           e.stopImmediatePropagation?.()
           const decision = decideRightClickAction(vRef.current, selRange())
 
@@ -1786,7 +1802,7 @@ export function TextInput({
         e.stopImmediatePropagation?.()
         endMouseSelection()
       }}
-      ref={boxRef}
+      ref={setInputNode}
       width={columns}
     >
       {/* Explicit theme color on the typed text — default fg tracks the HOST

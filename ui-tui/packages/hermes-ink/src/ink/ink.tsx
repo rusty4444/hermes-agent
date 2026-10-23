@@ -2057,14 +2057,29 @@ export default class Ink {
       this.scheduleRender()
     }
   }
-  dispatchKeyboardEvent(parsedKey: ParsedKey): void {
+  dispatchKeyboardEvent(parsedKey: ParsedKey, dispatchInput?: () => boolean): void {
     const target = this.focusManager.activeElement ?? this.rootNode
     const event = new KeyboardEvent(parsedKey)
     dispatcher.dispatchDiscrete(target, event)
 
+    // Resolve against native focus for every parsed key, including multiple
+    // keys in one stdin read. React focus state is only presentation state.
+    if (!event.defaultPrevented && !event.didStopImmediatePropagation() && dispatchInput?.()) {
+      event.preventDefault()
+    }
+
     // Tab cycling is the default action — only fires if no handler
     // called preventDefault(). Mirrors browser behavior.
-    if (!event.defaultPrevented && parsedKey.name === 'tab' && !parsedKey.ctrl && !parsedKey.meta) {
+    if (
+      !event.defaultPrevented &&
+      !parsedKey.isPasted &&
+      parsedKey.name === 'tab' &&
+      !parsedKey.ctrl &&
+      !parsedKey.meta &&
+      !parsedKey.super &&
+      !parsedKey.fn &&
+      !parsedKey.option
+    ) {
       if (parsedKey.shift) {
         this.focusManager.focusPrevious(this.rootNode)
       } else {

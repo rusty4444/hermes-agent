@@ -26,6 +26,8 @@ declare module '@hermes/ink' {
   }
 
   export type InputEvent = {
+    readonly defaultPrevented: boolean
+    preventDefault(): void
     readonly input: string
     /** `input` is a ctrl chord's binding name, not typed text (#115284). */
     readonly isControlChord: boolean
@@ -34,6 +36,23 @@ declare module '@hermes/ink' {
   }
 
   export type InputHandler = (input: string, key: Key, event: InputEvent) => void
+
+  /** Opaque native host node accepted by the focus API. */
+  export interface DOMElement {
+    readonly nodeName: string
+  }
+  export interface KeyboardEvent {
+    readonly key: string
+    readonly ctrl: boolean
+    readonly shift: boolean
+    readonly meta: boolean
+    readonly superKey: boolean
+    readonly fn: boolean
+    readonly isPasted: boolean
+    preventDefault(): void
+    stopImmediatePropagation(): void
+  }
+  export function getFocusManager(node: DOMElement): { blur(): void }
 
   export type FrameEvent = {
     readonly durationMs: number

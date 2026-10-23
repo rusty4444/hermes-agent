@@ -1,7 +1,7 @@
-import { Box, Text, useStdin } from '@hermes/ink'
+import { Box, type DOMElement, getFocusManager, type KeyboardEvent, Text } from '@hermes/ink'
 import { stripAnsi } from '@hermes/shared/ansi'
 import { useStore } from '@nanostores/react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { $expandedJobNotices, toggleJobNotice } from '../app/internalJobNoticeStore.js'
 import { $isBlocked } from '../app/overlayStore.js'
@@ -13,58 +13,35 @@ export function InternalJobNotice({ msg, t }: { msg: Msg; t: Theme }) {
   const expanded = useStore($expandedJobNotices)
   const blocked = useStore($isBlocked)
   const [focused, setFocused] = useState(false)
-  const button = useRef<FocusNode | null>(null)
-  const { inputEmitter } = useStdin()
+  const button = useRef<DOMElement | null>(null)
   const T = useT().chatBits.messageLine
   const notice = msg.jobNotice!
   const open = expanded.has(notice.id)
 
-  useEffect(() => {
-    if (!focused || !inputEmitter) {
+  const handleKeyDown = (event: KeyboardEvent) => {
+    // Decision overlays retain priority even before React re-renders this
+    // control. Native dispatch, not focused React state, chooses the owner.
+    if ($isBlocked.get() || event.isPasted || event.ctrl || event.meta || event.superKey || event.fn) {
       return
     }
 
-    // Ink's legacy useInput listeners run *before* DOM keydown. Claim button
-    // keys before the composer can submit a draft or insert a space. Modal
-    // decisions always take priority over this nonblocking transcript control.
-    const handle: Parameters<typeof inputEmitter.on>[1] = event => {
-      if (
-        $isBlocked.get() ||
-        event.keypress.isPasted ||
-        event.keypress.ctrl ||
-        event.keypress.meta ||
-        event.keypress.super
-      ) {
-        return
-      }
-
-      if (event.key.escape) {
-        event.stopImmediatePropagation()
-        let root = button.current
-
-        while (root?.parentNode) {
-          root = root.parentNode
-        }
-
-        root?.focusManager?.blur()
-      } else if (event.key.return || event.input === ' ') {
-        event.stopImmediatePropagation()
-        toggleJobNotice(notice.id)
-      }
+    if (event.key === 'tab') {
+      // Keep native Tab cycling but do not run composer completion / YOLO.
+      event.stopImmediatePropagation()
+    } else if (!event.shift && event.key === 'escape') {
+      event.preventDefault()
+      getFocusManager(button.current!).blur()
+    } else if (!event.shift && (event.key === 'return' || event.key === ' ')) {
+      event.preventDefault()
+      toggleJobNotice(notice.id)
     }
-
-    inputEmitter.prependListener('input', handle)
-
-    return () => {
-      inputEmitter.removeListener('input', handle)
-    }
-  }, [focused, inputEmitter, notice.id])
+  }
 
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text color={t.color.muted} wrap="truncate-end">
         ◈ {notice.hasIssues ? `${T.jobIssues} · ` : ''}
-        {T.internalJob} · {msg.text}
+        {T.internalJob} · {stripAnsi(msg.text)}
       </Text>
       <Box
         alignSelf="flex-start"
@@ -72,12 +49,13 @@ export function InternalJobNotice({ msg, t }: { msg: Msg; t: Theme }) {
         onClick={(event: { stopImmediatePropagation: () => void }) => {
           event.stopImmediatePropagation()
 
-          if (!blocked) {
+          if (!$isBlocked.get()) {
             toggleJobNotice(notice.id)
           }
         }}
         onFocus={() => setFocused(true)}
-        ref={(node: FocusNode | null) => {
+        onKeyDown={handleKeyDown}
+        ref={(node: DOMElement | null) => {
           button.current = node
         }}
         tabIndex={blocked ? -1 : 0}
@@ -91,9 +69,4 @@ export function InternalJobNotice({ msg, t }: { msg: Msg; t: Theme }) {
       {open && <Text color={t.color.muted}>{stripAnsi(notice.body)}</Text>}
     </Box>
   )
-}
-
-interface FocusNode {
-  parentNode?: FocusNode
-  focusManager?: { blur: () => void }
 }

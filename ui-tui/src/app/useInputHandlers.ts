@@ -807,6 +807,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     // shift-tab flips yolo without spending a turn (claude-code parity)
     if (key.shift && key.tab && !cState.completions.length) {
+      event.preventDefault()
+
       if (!live.sid) {
         return void actions.sys(t('session.input.yoloNeedsSession'))
       }
@@ -829,6 +831,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (key.tab && cState.completions.length) {
+      event.preventDefault()
+
       const row = cState.completions[cState.compIdx]
 
       if (row?.text) {

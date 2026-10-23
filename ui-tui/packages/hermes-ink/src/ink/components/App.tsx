@@ -148,7 +148,7 @@ type Props = {
   readonly onCursorAdvance?: CursorAdvanceNotifier
   // Dispatch a keyboard event through the DOM tree. Called for each
   // parsed key alongside the legacy EventEmitter path.
-  readonly dispatchKeyboardEvent: (parsedKey: ParsedKey) => void
+  readonly dispatchKeyboardEvent: (parsedKey: ParsedKey, dispatchInput?: () => boolean) => void
 }
 
 // Multi-click detection thresholds. 500ms is the macOS default; a small
@@ -777,10 +777,13 @@ function processKeysInBatch(app: App, items: ParsedInput[], _unused1: undefined,
 
     app.handleInput(sequence)
     const event = new InputEvent(item)
-    app.inputEmitter.emit('input', event)
+    // Focused DOM controls get first refusal; unclaimed input then reaches
+    // legacy useInput handlers before the renderer's default Tab action.
+    app.props.dispatchKeyboardEvent(item, () => {
+      app.inputEmitter.emit('input', event)
 
-    // Also dispatch through the DOM tree so onKeyDown handlers fire.
-    app.props.dispatchKeyboardEvent(item)
+      return event.defaultPrevented
+    })
   }
 }
 

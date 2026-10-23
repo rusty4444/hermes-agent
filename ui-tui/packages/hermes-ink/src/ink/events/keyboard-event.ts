@@ -17,6 +17,7 @@ export class KeyboardEvent extends TerminalEvent {
   readonly meta: boolean
   readonly superKey: boolean
   readonly fn: boolean
+  readonly isPasted: boolean
 
   constructor(parsedKey: ParsedKey) {
     super('keydown', { bubbles: true, cancelable: true })
@@ -27,12 +28,17 @@ export class KeyboardEvent extends TerminalEvent {
     this.meta = parsedKey.meta || parsedKey.option
     this.superKey = parsedKey.super
     this.fn = parsedKey.fn
+    this.isPasted = Boolean(parsedKey.isPasted)
   }
 }
 
 function keyFromParsed(parsed: ParsedKey): string {
   const seq = parsed.sequence ?? ''
   const name = parsed.name ?? ''
+
+  if (name === 'space') {
+    return ' '
+  }
 
   // Ctrl combos: sequence is a control byte (\x03 for ctrl+c), name is the
   // letter. Browsers report e.key === 'c' with e.ctrlKey === true.

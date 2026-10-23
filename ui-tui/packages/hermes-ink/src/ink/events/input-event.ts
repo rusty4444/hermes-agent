@@ -1,6 +1,6 @@
 import { nonAlphanumericKeys, type ParsedKey } from '../parse-keypress.js'
 
-import { Event } from './event.js'
+import { TerminalEvent } from './terminal-event.js'
 
 const inputForSpecialSequence = (name: string, shift: boolean): string => {
   const input = name === 'space' ? ' ' : name === 'return' || name === 'escape' ? '' : name
@@ -188,7 +188,7 @@ function isControlChord(keypress: ParsedKey): boolean {
   return keypress.ctrl && !keypress.isPasted
 }
 
-export class InputEvent extends Event {
+export class InputEvent extends TerminalEvent {
   /** `input` is a ctrl chord's binding name, not text the user typed. */
   readonly isControlChord: boolean
   readonly keypress: ParsedKey
@@ -196,7 +196,7 @@ export class InputEvent extends Event {
   readonly input: string
 
   constructor(keypress: ParsedKey) {
-    super()
+    super('input')
     const [key, input] = parseKey(keypress)
 
     this.isControlChord = isControlChord(keypress)
