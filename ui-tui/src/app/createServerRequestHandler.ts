@@ -3,12 +3,22 @@ import type { ServerRequest } from '@hermes/shared/json-rpc-channel'
 import { t } from '../i18n/runtime.js'
 import type { ClarifyQuestion } from '../types.js'
 
+import type { OverlayState } from './interfaces.js'
 import { patchOverlayState } from './overlayStore.js'
 import { rememberServerRequest } from './serverRequestStore.js'
+
+export type ServerPromptKey =
+  'approval' | 'clarify' | 'sudo' | 'secret' | 'vaultUnlock' | 'vaultSaveLogin' | 'vaultCode'
+export type ServerPromptState = Partial<Pick<OverlayState, ServerPromptKey>>
+export interface ServerPrompt {
+  request: ServerRequest
+  overlay: ServerPromptState
+}
 
 export interface ServerRequestHandlerContext {
   ringPromptBell: () => void
   setStatus: (status: string) => void
+  openPrompt?: (prompt: ServerPrompt, publish: () => void) => void
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -16,24 +26,31 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const strList = (v: unknown): null | string[] =>
   Array.isArray(v) && v.length > 0 ? v.filter((c): c is string => typeof c === 'string') : null
 
-/**
- * The Ink TUI's answer to the backend's server→client requests
- * (`tui_gateway/server_requests.py`). Each method opens its overlay card;
- * the card's answer path resolves the request through `serverRequestStore`.
- * Methods the terminal cannot answer (desktop GUI bridges: `preview.*`,
- * `window.read`, `tour`, `mcp.setup`, `terminal.read`) return `false` so the
- * channel answers `-32601` and the tool fails fast instead of waiting out its
- * deadline.
- */
+/** Prepare the real request's card before publishing it; adoption may own its publication. */
 export function createServerRequestHandler(ctx: ServerRequestHandlerContext): (request: ServerRequest) => boolean {
   const { ringPromptBell, setStatus } = ctx
 
-  const open = (request: ServerRequest, status: string) => {
-    rememberServerRequest(request)
-    setStatus(status)
+  const open = (request: ServerRequest, status: string, overlay: ServerPromptState) => {
+    const publish = () => {
+      if (!Object.keys(overlay).length) {
+        request.respond({})
 
-    if (!request.replayed) {
-      ringPromptBell()
+        return
+      }
+
+      rememberServerRequest(request)
+      patchOverlayState(overlay)
+      setStatus(status)
+
+      if (!request.replayed) {
+        ringPromptBell()
+      }
+    }
+
+    if (ctx.openPrompt) {
+      ctx.openPrompt({ overlay, request }, publish)
+    } else {
+      publish()
     }
   }
 
@@ -53,7 +70,7 @@ export function createServerRequestHandler(ctx: ServerRequestHandlerContext): (r
           }))
 
         if (!questions.length) {
-          request.respond({})
+          open(request, '', {})
 
           return true
         }
@@ -67,16 +84,14 @@ export function createServerRequestHandler(ctx: ServerRequestHandlerContext): (r
               )
             : {}
 
-        patchOverlayState({ clarify: { answers, questions, requestId: request.id } })
-        open(request, t('session.status.waitingForInput'))
+        open(request, t('session.status.waitingForInput'), { clarify: { answers, questions, requestId: request.id } })
 
         return true
       }
 
-      case 'approval': {
-        patchOverlayState({
+      case 'approval':
+        open(request, t('session.status.approvalNeeded'), {
           approval: {
-            // Only an explicit false drops the permanent-allow option.
             allowPermanent: p.allow_permanent !== false,
             choices: strList(p.choices) ?? undefined,
             command: str(p.command),
@@ -85,49 +100,47 @@ export function createServerRequestHandler(ctx: ServerRequestHandlerContext): (r
             smartDenied: p.smart_denied === true
           }
         })
-        open(request, t('session.status.approvalNeeded'))
 
         return true
-      }
 
       case 'sudo':
-        patchOverlayState({ sudo: { requestId: request.id } })
-        open(request, t('session.status.sudoPasswordNeeded'))
+        open(request, t('session.status.sudoPasswordNeeded'), { sudo: { requestId: request.id } })
 
         return true
 
       case 'secret':
-        patchOverlayState({ secret: { envVar: str(p.env_var), prompt: str(p.prompt), requestId: request.id } })
-        open(request, t('session.status.secretInputNeeded'))
+        open(request, t('session.status.secretInputNeeded'), {
+          secret: { envVar: str(p.env_var), prompt: str(p.prompt), requestId: request.id }
+        })
 
         return true
 
       case 'vault.unlock_prompt':
-        patchOverlayState({
+        open(request, t('session.status.unlockVault', str(p.display_name)), {
           vaultUnlock: { backend: str(p.backend), displayName: str(p.display_name), requestId: request.id }
         })
-        open(request, t('session.status.unlockVault', str(p.display_name)))
 
         return true
       case 'vault.save_login': {
         const site = str(p.site) || str(p.origin)
-
-        patchOverlayState({ vaultSaveLogin: { origin: str(p.origin), requestId: request.id, site } })
-        open(request, t('session.status.saveLogin', site))
+        open(request, t('session.status.saveLogin', site), {
+          vaultSaveLogin: { origin: str(p.origin), requestId: request.id, site }
+        })
 
         return true
       }
 
       case 'vault.code': {
         const site = str(p.site)
-
-        patchOverlayState({ vaultCode: { hint: str(p.hint), requestId: request.id, site } })
-        open(request, t('session.status.verificationCode', site))
+        open(request, t('session.status.verificationCode', site), {
+          vaultCode: { hint: str(p.hint), requestId: request.id, site }
+        })
 
         return true
       }
 
       default:
+        // Desktop-only bridges must still fail fast, including during adoption.
         return false
     }
   }

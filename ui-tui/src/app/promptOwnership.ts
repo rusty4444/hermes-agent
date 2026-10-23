@@ -3,6 +3,7 @@ import type { ServerRequest } from '@hermes/shared/json-rpc-channel'
 import type { OverlayState } from './interfaces.js'
 import { getActivePromptKey, getOverlayState, patchOverlayState, type PromptKey } from './overlayStore.js'
 import { getServerRequest } from './serverRequestStore.js'
+import { $sessionAdopting } from './sessionTransitionStore.js'
 import { getUiState } from './uiStore.js'
 
 export interface PromptOwner {
@@ -48,7 +49,7 @@ export function capturePromptOwner(
 }
 
 export function ownsPrompt(owner: PromptOwner | null, completion = false): owner is PromptOwner {
-  if (!owner || getUiState().sid !== owner.sessionId) {
+  if (!owner || $sessionAdopting.get() || getUiState().sid !== owner.sessionId) {
     return false
   }
 

@@ -854,6 +854,7 @@ export function useMainApp(gw: GatewayClient) {
   const onServerRequest = useMemo(
     () =>
       createServerRequestHandler({
+        openPrompt: session.adoption.openPrompt,
         ringPromptBell: () => {
           if (bellOnPrompt && stdout?.isTTY) {
             stdout.write('\x07')
@@ -861,13 +862,21 @@ export function useMainApp(gw: GatewayClient) {
         },
         setStatus: status => patchUiState({ status })
       }),
-    [bellOnPrompt, stdout]
+    [bellOnPrompt, session.adoption, stdout]
   )
 
   onServerRequestRef.current = onServerRequest
 
   useEffect(() => {
     const handler = (ev: AnyGatewayEvent) => {
+      if (ev.type === 'request.cancel' && ev.payload?.id) {
+        session.adoption.cancel(ev.session_id, ev.payload.id)
+
+        if (ev.session_id && ev.session_id !== getUiState().sid) {
+          return
+        }
+      }
+
       if (ev.type === 'gateway.ready') {
         gaveUpRef.current = false
       }
@@ -882,6 +891,7 @@ export function useMainApp(gw: GatewayClient) {
     }
 
     const exitHandler = (code: null | number) => {
+      session.adoption.invalidate()
       turnController.reset()
       const state = getUiState()
       const storedSid = state.storedSid
@@ -951,7 +961,7 @@ export function useMainApp(gw: GatewayClient) {
       gw.off('request', requestHandler)
       gw.off('exit', exitHandler)
     }
-  }, [gw, sys])
+  }, [gw, session.adoption, sys])
 
   useLongRunToolCharms()
 

@@ -24,6 +24,7 @@ import {
 } from '../lib/text.js'
 import type { ActiveTool, ActivityItem, Msg, SubagentProgress, TodoItem } from '../types.js'
 
+import type { ServerPromptState } from './createServerRequestHandler.js'
 import type { Notice } from './interfaces.js'
 import { resetFlowOverlays } from './overlayStore.js'
 import { pushSnapshot } from './spawnHistoryStore.js'
@@ -336,7 +337,7 @@ class TurnController {
     patchTurnState({ reasoningActive: false, reasoningStreaming: false })
   }
 
-  idle() {
+  idle(sessionPrompts: ServerPromptState = {}) {
     this.endReasoningPhase()
     this.activeTools = []
     this.streamTimer = clear(this.streamTimer)
@@ -353,7 +354,7 @@ class TurnController {
       turnTrail: []
     })
     patchUiState({ busy: false, compacting: false })
-    resetFlowOverlays()
+    resetFlowOverlays(sessionPrompts)
   }
 
   // `keepBusy` holds the session busy after interrupting so a queued message
@@ -963,10 +964,10 @@ class TurnController {
     patchTurnState({ toolTokens: this.toolTokenAcc, tools: this.activeTools })
   }
 
-  reset() {
+  reset(sessionPrompts: ServerPromptState = {}) {
     this.clearReasoning()
     this.clearStatusTimer()
-    this.idle()
+    this.idle(sessionPrompts)
     this.bufRef = ''
     this.interrupted = false
     this.sealedInterrupt = null
@@ -986,8 +987,8 @@ class TurnController {
     patchTurnState({ activity: [], outcome: '' })
   }
 
-  fullReset() {
-    this.reset()
+  fullReset(sessionPrompts: ServerPromptState = {}) {
+    this.reset(sessionPrompts)
     resetTurnState()
   }
 

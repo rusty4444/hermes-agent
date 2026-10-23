@@ -22,8 +22,10 @@ import { asRpcResult } from '../lib/rpc.js'
 import type { Msg, PanelSection, SessionInfo } from '../types.js'
 
 import { applyConnectionRequest, clearConnectionOperation } from './connectionOperationStore.js'
+import type { ServerPromptState } from './createServerRequestHandler.js'
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
 import { patchOverlayState } from './overlayStore.js'
+import { SessionAdoption } from './sessionAdoption.js'
 import { scheduleResumeScrollToBottom } from './sessionResumeView.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -165,29 +167,39 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
   )
 
   const cancelResumeScrollRef = useRef<null | (() => void)>(null)
+  const adoption = useMemo(() => new SessionAdoption(), [])
+
+  const resetSessionState = useCallback(
+    (sessionPrompts: ServerPromptState = {}) => {
+      cancelResumeScrollRef.current?.()
+      cancelResumeScrollRef.current = null
+      turnController.fullReset(sessionPrompts)
+      setVoiceRecording(false)
+      setVoiceProcessing(false)
+      patchUiState({ bgTasks: new Set(), info: null, sid: null, storedSid: null, usage: ZERO })
+      setHistoryItems([])
+      setLastUserMsg('')
+      setStickyPrompt('')
+      // Half-prune: new session has new keys, but keep a warm pool in case
+      // the user resumes back to the prior session.
+      evictInkCaches('half')
+    },
+    [setHistoryItems, setLastUserMsg, setStickyPrompt, setVoiceProcessing, setVoiceRecording]
+  )
 
   const resetSession = useCallback(() => {
-    cancelResumeScrollRef.current?.()
-    cancelResumeScrollRef.current = null
-    turnController.fullReset()
-    setVoiceRecording(false)
-    setVoiceProcessing(false)
-    patchUiState({ bgTasks: new Set(), info: null, sid: null, storedSid: null, usage: ZERO })
-    setHistoryItems([])
-    setLastUserMsg('')
-    setStickyPrompt('')
+    adoption.invalidate()
+    resetSessionState()
     composerActions.setComposerTokens([])
-    // Half-prune: new session has new keys, but keep a warm pool in case
-    // the user resumes back to the prior session.
-    evictInkCaches('half')
-  }, [composerActions, setHistoryItems, setLastUserMsg, setStickyPrompt, setVoiceProcessing, setVoiceRecording])
+  }, [adoption, composerActions, resetSessionState])
 
   useEffect(
     () => () => {
       cancelResumeScrollRef.current?.()
       cancelResumeScrollRef.current = null
+      adoption.dispose()
     },
-    []
+    [adoption]
   )
 
   const resetVisibleHistory = useCallback(
@@ -209,96 +221,137 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   const startNewSession = useCallback(
     async (msg?: string, title?: string, keepCurrent = false) => {
-      const setup = await rpc<SetupStatusResponse>('setup.status', {})
+      const transition = adoption.begin()
 
-      if (setup?.provider_configured === false) {
-        panel(setupRequiredTitle(), buildSetupRequiredSections())
-        patchUiState({ status: t('session.status.setupRequired') })
+      try {
+        if (!adoption.owns(transition)) {
+          return null
+        }
 
-        return null
-      }
+        const setup = await rpc<SetupStatusResponse>('setup.status', {})
 
-      const previousSid = getUiState().sid
-      const closed = keepCurrent ? null : await closeSession(previousSid, true)
+        if (!adoption.owns(transition)) {
+          return null
+        }
 
-      const r = await rpc<SessionCreateResponse>('session.create', {
-        cols: colsRef.current,
-        ...(STARTUP_WORKSPACE_CWD ? { cwd: STARTUP_WORKSPACE_CWD } : {})
-      })
+        if (setup?.provider_configured === false) {
+          panel(setupRequiredTitle(), buildSetupRequiredSections())
+          patchUiState({ status: t('session.status.setupRequired') })
 
-      if (!r) {
-        patchUiState({ status: 'ready' })
+          return null
+        }
 
-        return null
-      }
+        const previousSid = getUiState().sid
+        const closed = keepCurrent ? null : await closeSession(previousSid, true)
 
-      // The durable id lives on the create result; the lazy-create `info` does
-      // not carry it, and session.resume / the exit epilogue need the stored id.
-      const storedSid = r.stored_session_id || r.session_id
-      const info = r.info ? { ...r.info, stored_session_id: storedSid } : null
-      const requestedTitle = title?.trim() ?? ''
+        if (!adoption.owns(transition)) {
+          return null
+        }
 
-      resetSession()
-      setSessionStartedAt(Date.now())
-
-      writeActiveSessionFile(storedSid)
-      patchUiState({
-        info,
-        sid: r.session_id,
-        status: info?.version ? 'ready' : t('session.status.startingAgent'),
-        storedSid,
-        usage: usageFrom(info)
-      })
-
-      if (info) {
-        setHistoryItems([introMsg(info)])
-      }
-
-      if (info?.credential_warning) {
-        sys(`warning: ${describeCredentialWarning(info.credential_warning)}`)
-      }
-
-      if (info?.config_warning) {
-        sys(`warning: ${info.config_warning}`)
-      }
-
-      if (msg) {
-        sys(msg)
-      }
-
-      // After the reset above, so the closed session's plugin messages stay visible.
-      closed?.messages?.forEach(message => sys(message))
-
-      if (requestedTitle) {
-        rpc<SessionTitleResponse>('session.title', {
-          session_id: r.session_id,
-          title: requestedTitle
+        const r = await rpc<SessionCreateResponse>('session.create', {
+          cols: colsRef.current,
+          ...(STARTUP_WORKSPACE_CWD ? { cwd: STARTUP_WORKSPACE_CWD } : {})
         })
-          .then(result => {
-            if (!result || getUiState().sid !== r.session_id) {
-              return
-            }
 
-            const nextTitle = (result.title ?? requestedTitle).trim()
-            const suffix = result.pending ? t('session.lifecycle.titleQueuedSuffix') : ''
-            patchUiState({ sessionTitle: nextTitle })
-            sys(`${t('session.lifecycle.sessionTitleSet', nextTitle)}${suffix}`)
-          })
-          .catch((err: unknown) => {
-            if (getUiState().sid !== r.session_id) {
-              return
-            }
+        if (!adoption.owns(transition)) {
+          return null
+        }
 
-            const message = err instanceof Error ? err.message : String(err)
-            sys(`warning: ${t('session.lifecycle.failedToSetTitle', message)}`)
+        if (!r || typeof r.session_id !== 'string' || !r.session_id) {
+          patchUiState({ status: 'ready' })
+
+          return null
+        }
+
+        // The durable id lives on the create result; the lazy-create `info` does
+        // not carry it, and session.resume / the exit epilogue need the stored id.
+        const storedSid = r.stored_session_id || r.session_id
+        const info = r.info ? { ...r.info, stored_session_id: storedSid } : null
+        const requestedTitle = title?.trim() ?? ''
+
+        const prompts = adoption.adopt(transition, r)
+
+        if (!prompts) {
+          return null
+        }
+
+        resetSessionState(prompts)
+        composerActions.setComposerTokens([])
+        setSessionStartedAt(Date.now())
+
+        writeActiveSessionFile(storedSid)
+        patchUiState({
+          info,
+          sid: r.session_id,
+          status: info?.version ? 'ready' : t('session.status.startingAgent'),
+          storedSid,
+          usage: usageFrom(info)
+        })
+
+        if (info) {
+          setHistoryItems([introMsg(info)])
+        }
+
+        if (info?.credential_warning) {
+          sys(`warning: ${describeCredentialWarning(info.credential_warning)}`)
+        }
+
+        if (info?.config_warning) {
+          sys(`warning: ${info.config_warning}`)
+        }
+
+        if (msg) {
+          sys(msg)
+        }
+
+        // After the reset above, so the closed session's plugin messages stay visible.
+        closed?.messages?.forEach(message => sys(message))
+
+        if (requestedTitle) {
+          rpc<SessionTitleResponse>('session.title', {
+            session_id: r.session_id,
+            title: requestedTitle
           })
+            .then(result => {
+              if (!result || getUiState().sid !== r.session_id) {
+                return
+              }
+
+              const nextTitle = (result.title ?? requestedTitle).trim()
+              const suffix = result.pending ? t('session.lifecycle.titleQueuedSuffix') : ''
+              patchUiState({ sessionTitle: nextTitle })
+              sys(`${t('session.lifecycle.sessionTitleSet', nextTitle)}${suffix}`)
+            })
+            .catch((err: unknown) => {
+              if (getUiState().sid !== r.session_id) {
+                return
+              }
+
+              const message = err instanceof Error ? err.message : String(err)
+              sys(`warning: ${t('session.lifecycle.failedToSetTitle', message)}`)
+            })
+        }
+
+        signalFreshSessionBoundary(previousSid, r.session_id, onFreshSessionStarted)
+
+        return r.session_id
+      } finally {
+        adoption.finish(transition)
       }
-
-      signalFreshSessionBoundary(previousSid, r.session_id, onFreshSessionStarted)
-
-      return r.session_id
     },
-    [closeSession, colsRef, onFreshSessionStarted, panel, resetSession, rpc, setHistoryItems, setSessionStartedAt, sys]
+    [
+      adoption,
+      closeSession,
+      colsRef,
+      composerActions,
+      onFreshSessionStarted,
+      panel,
+      resetSessionState,
+      rpc,
+      setHistoryItems,
+      setSessionStartedAt,
+      sys
+    ]
   )
 
   const newSession = useCallback(
@@ -317,16 +370,27 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   const activateLiveSession = useCallback(
     (id: string) => {
+      const transition = adoption.begin()
+
+      if (!adoption.owns(transition)) {
+        return
+      }
+
       patchOverlayState({ sessions: false })
       patchUiState({ status: t('session.status.switchingSession') })
       // The card belongs to the session being left; the activated one answers with its own.
       clearConnectionOperation()
 
-      gw.request<SessionActivateResponse>('session.activate', { session_id: id })
+      return gw
+        .request<SessionActivateResponse>('session.activate', { session_id: id })
         .then(raw => {
+          if (!adoption.owns(transition)) {
+            return
+          }
+
           const r = asRpcResult<SessionActivateResponse>(raw)
 
-          if (!r) {
+          if (!r || typeof r.session_id !== 'string' || !r.session_id) {
             sys(`error: ${t('session.common.invalidResponse', 'session.activate')}`)
 
             return patchUiState({ status: 'ready' })
@@ -338,14 +402,19 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           const storedSid = r.session_key || r.session_id
           const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
 
-          resetSession()
-          setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
-
           const transcript = [
             ...toTranscriptMessages(r.messages, storedSid),
             ...liveSessionInflightMessages(r.inflight, storedSid)
           ]
 
+          const prompts = adoption.adopt(transition, r)
+
+          if (!prompts) {
+            return
+          }
+
+          resetSessionState(prompts)
+          setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
           setHistoryItems(info ? [introMsg(info), ...transcript] : transcript)
           writeActiveSessionFile(storedSid)
           patchUiState({
@@ -366,84 +435,126 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           cancelResumeScrollRef.current = scheduleResumeScrollToBottom(scrollRef)
         })
         .catch((e: Error) => {
+          if (!adoption.owns(transition)) {
+            return
+          }
+
           sys(`error: ${e.message}`)
           patchUiState({ status: 'ready' })
         })
+        .finally(() => adoption.finish(transition))
     },
-    [gw, resetSession, scrollRef, setHistoryItems, setSessionStartedAt, sys]
+    [adoption, gw, resetSessionState, scrollRef, setHistoryItems, setSessionStartedAt, sys]
   )
 
   const resumeById = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const transition = adoption.begin()
+
+      if (!adoption.owns(transition)) {
+        return
+      }
+
       patchOverlayState({ sessions: false })
       patchUiState({ status: t('session.status.resuming') })
 
-      return rpc<SetupStatusResponse>('setup.status', {}).then(setup => {
-        if (setup?.provider_configured === false) {
-          panel(setupRequiredTitle(), buildSetupRequiredSections())
-          patchUiState({ status: t('session.status.setupRequired') })
+      return rpc<SetupStatusResponse>('setup.status', {})
+        .then(setup => {
+          if (!adoption.owns(transition)) {
+            return
+          }
 
-          return
-        }
+          if (setup?.provider_configured === false) {
+            panel(setupRequiredTitle(), buildSetupRequiredSections())
+            patchUiState({ status: t('session.status.setupRequired') })
 
-        const previousSid = getUiState().sid
+            return
+          }
 
-        return gw
-          .request<SessionResumeResult>('session.resume', { cols: colsRef.current, session_id: id })
-          .then(raw => {
-            const r = asRpcResult<SessionResumeResult>(raw)
+          const previousSid = getUiState().sid
 
-            if (!r) {
-              sys(`error: ${t('session.common.invalidResponse', 'session.resume')}`)
+          return gw
+            .request<SessionResumeResult>('session.resume', { cols: colsRef.current, session_id: id })
+            .then(raw => {
+              if (!adoption.owns(transition)) {
+                return
+              }
 
-              return patchUiState({ status: 'ready' })
-            }
+              const r = asRpcResult<SessionResumeResult>(raw)
 
-            const storedSid = r.info?.stored_session_id || r.stored_session_id || r.resumed || id
-            const info = r.info ? { ...r.info, stored_session_id: storedSid } : null
+              if (!r || typeof r.session_id !== 'string' || !r.session_id) {
+                sys(`error: ${t('session.common.invalidResponse', 'session.resume')}`)
 
-            const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
+                return patchUiState({ status: 'ready' })
+              }
 
-            resetSession()
-            setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
+              const storedSid = r.info?.stored_session_id || r.stored_session_id || r.resumed || id
+              const info = r.info ? { ...r.info, stored_session_id: storedSid } : null
 
-            const resumed = [
-              ...toTranscriptMessages(r.messages, storedSid),
-              ...liveSessionInflightMessages(r.inflight, storedSid)
-            ]
+              const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
 
-            setHistoryItems(info ? [introMsg(info), ...resumed] : resumed)
-            writeActiveSessionFile(storedSid)
-            patchUiState({
-              busy: running,
-              info,
-              sid: r.session_id,
-              status: statusFromLiveSession(r.status ?? undefined, running),
-              storedSid,
-              usage: usageFrom(info)
+              const resumed = [
+                ...toTranscriptMessages(r.messages, storedSid),
+                ...liveSessionInflightMessages(r.inflight, storedSid)
+              ]
+
+              const prompts = adoption.adopt(transition, r)
+
+              if (!prompts) {
+                return
+              }
+
+              resetSessionState(prompts)
+              setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
+              setHistoryItems(info ? [introMsg(info), ...resumed] : resumed)
+              writeActiveSessionFile(storedSid)
+              patchUiState({
+                busy: running,
+                info,
+                sid: r.session_id,
+                status: statusFromLiveSession(r.status ?? undefined, running),
+                storedSid,
+                usage: usageFrom(info)
+              })
+              hydrateLiveSessionInflight(r.inflight)
+
+              if (r.pending_connection) {
+                applyConnectionRequest(r.pending_connection)
+              } else {
+                clearConnectionOperation()
+              }
+
+              cancelResumeScrollRef.current?.()
+              cancelResumeScrollRef.current = scheduleResumeScrollToBottom(scrollRef)
+
+              if (previousSid && previousSid !== r.session_id) {
+                void closeSession(previousSid)
+              }
             })
-            hydrateLiveSessionInflight(r.inflight)
+            .catch((e: Error) => {
+              if (!adoption.owns(transition)) {
+                return
+              }
 
-            if (r.pending_connection) {
-              applyConnectionRequest(r.pending_connection)
-            } else {
-              clearConnectionOperation()
-            }
-
-            cancelResumeScrollRef.current?.()
-            cancelResumeScrollRef.current = scheduleResumeScrollToBottom(scrollRef)
-
-            if (previousSid && previousSid !== r.session_id) {
-              void closeSession(previousSid)
-            }
-          })
-          .catch((e: Error) => {
-            sys(`error: ${e.message}`)
-            patchUiState({ status: 'ready' })
-          })
-      })
+              sys(`error: ${e.message}`)
+              patchUiState({ status: 'ready' })
+            })
+        })
+        .finally(() => adoption.finish(transition))
     },
-    [closeSession, colsRef, gw, panel, resetSession, rpc, scrollRef, setHistoryItems, setSessionStartedAt, sys]
+    [
+      adoption,
+      closeSession,
+      colsRef,
+      gw,
+      panel,
+      resetSessionState,
+      rpc,
+      scrollRef,
+      setHistoryItems,
+      setSessionStartedAt,
+      sys
+    ]
   )
 
   const guardBusySessionSwitch = useCallback(
@@ -461,6 +572,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   return useMemo(
     () => ({
+      adoption,
       activateLiveSession,
       closeSession,
       guardBusySessionSwitch,
@@ -472,6 +584,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       trimLastExchange: trimTail
     }),
     [
+      adoption,
       activateLiveSession,
       closeSession,
       guardBusySessionSwitch,

@@ -1,6 +1,8 @@
 import { atom, computed } from 'nanostores'
 
+import type { ServerPromptState } from './createServerRequestHandler.js'
 import type { OverlayState } from './interfaces.js'
+import { $sessionAdopting } from './sessionTransitionStore.js'
 import { $uiState } from './uiStore.js'
 
 const buildOverlayState = (): OverlayState => ({
@@ -56,7 +58,10 @@ const BLOCKING_KEYS = [
   'widget'
 ] as const satisfies readonly (keyof OverlayState)[]
 
-export const $isBlocked = computed($overlayState, overlay => BLOCKING_KEYS.some(key => Boolean(overlay[key])))
+export const $isBlocked = computed(
+  [$overlayState, $sessionAdopting],
+  (overlay, adopting) => adopting || BLOCKING_KEYS.some(key => Boolean(overlay[key]))
+)
 
 /**
  * Does an open overlay actually PAINT OVER the status rule?
@@ -172,7 +177,7 @@ export const resetOverlayState = () => $overlayState.set(buildOverlayState())
  * `connection` is preserved too: the card belongs to a backend operation that outlives the turn's
  * idle edge, and only the operation's own settlement may close it.
  */
-export const resetFlowOverlays = () =>
+export const resetFlowOverlays = (sessionPrompts: ServerPromptState = {}) =>
   $overlayState.set({
     ...buildOverlayState(),
     agents: $overlayState.get().agents,
@@ -186,5 +191,6 @@ export const resetFlowOverlays = () =>
     petPicker: $overlayState.get().petPicker,
     pluginsHub: $overlayState.get().pluginsHub,
     sessions: $overlayState.get().sessions,
-    skillsHub: $overlayState.get().skillsHub
+    skillsHub: $overlayState.get().skillsHub,
+    ...sessionPrompts
   })
