@@ -148,7 +148,7 @@ def test_real_daemon_accepts_hud_and_voice_live_submits_and_notes_the_model(tmp_
             assert 'result' in created, created
             sid = created['result']['session_id']
             replies = {}
-            for name, extra in (('window', {}), ('hud', {'surface': 'hud'}),
+            for name, extra in (('window', {}), ('android', {'surface': 'android'}), ('hud', {'surface': 'hud'}),
                                 ('voice', {'surface': 'voice-live', 'voice_context': 'User: earlier words'})):
                 replies[name] = await rpc(ws, 'prompt.submit', session_id=sid, submission_id=name, text=name.upper() + '_TURN', **extra)
                 await asyncio.to_thread(_wait_for, lambda: _admissions(home).get(name) == 'terminal')
@@ -168,10 +168,16 @@ def test_real_daemon_accepts_hud_and_voice_live_submits_and_notes_the_model(tmp_
     for request in model.requests:
         content = next(m['content'] for m in reversed(request['messages']) if m['role'] == 'user')
         text = content if isinstance(content, str) else ''.join(p.get('text', '') for p in content)
-        for name in ('window', 'hud', 'voice'):
+        for name in ('window', 'android', 'hud', 'voice'):
             if name.upper() + '_TURN' in text:
                 users[name] = text
-    assert set(users) == {'window', 'hud', 'voice'}, users
+    assert set(users) == {'window', 'android', 'hud', 'voice'}, users
+    assert 'native Android' in users['android'] and 'MEDIA:/absolute/host/path' in users['android']
+    assert 'native Android' not in users['window'] and 'native Android' not in users['hud']
+    with closing(sqlite3.connect(f'file:{home / "state.db"}?mode=ro', uri=True)) as db:
+        content, api_content = db.execute(
+            "SELECT content, api_content FROM messages WHERE role='user' AND content='ANDROID_TURN'").fetchone()
+    assert content == 'ANDROID_TURN' and 'native Android' in api_content
     # Live voice: the delegation contract + the spoken context ride the model input, never the row.
     assert VOICE_LIVE_TURN_NOTE in users['voice'] and 'User: earlier words' in users['voice']
     assert VOICE_LIVE_TURN_NOTE not in users['window'] and VOICE_LIVE_TURN_NOTE not in users['hud']
@@ -213,7 +219,8 @@ def test_managed_worker_turn_carries_the_committed_surface_to_the_model(tmp_path
                                 model='main-model', provider='custom', base_url=base, api_key='loopback-only',
                                 toolsets=[], ignore_rules=True)
             assert 'result' in created, created
-            for name, extra in (('voice', {'surface': 'voice-live', 'voice_context': 'User: UNIQUE_PRIOR_CONTEXT'}),
+            for name, extra in (('android', {'surface': 'android'}),
+                                ('voice', {'surface': 'voice-live', 'voice_context': 'User: UNIQUE_PRIOR_CONTEXT'}),
                                 ('spoken', {'voice_turn': True}), ('plain', {})):
                 reply = await rpc(ws, 'prompt.submit', session_id=created['result']['session_id'],
                                   submission_id=name, text=name.upper() + '_TURN', **extra)
@@ -230,15 +237,16 @@ def test_managed_worker_turn_carries_the_committed_surface_to_the_model(tmp_path
         thread.join(timeout=5)
 
     with closing(sqlite3.connect(f'file:{home / "state.db"}?mode=ro', uri=True)) as db:
-        assert db.execute('SELECT COUNT(*) FROM worker_executions').fetchone()[0] == 3, 'every turn ran in a child'
+        assert db.execute('SELECT COUNT(*) FROM worker_executions').fetchone()[0] == 4, 'every turn ran in a child'
     turns = {}
     for request in model.requests:
         content = next(m['content'] for m in reversed(request['messages']) if m['role'] == 'user')
         text = content if isinstance(content, str) else ''.join(p.get('text', '') for p in content)
-        name = next((n for n in ('voice', 'spoken', 'plain') if n.upper() + '_TURN' in text), None)
+        name = next((n for n in ('android', 'voice', 'spoken', 'plain') if n.upper() + '_TURN' in text), None)
         if name:
             turns[name] = (request['model'], text)
-    assert set(turns) == {'voice', 'spoken', 'plain'}, turns
+    assert set(turns) == {'android', 'voice', 'spoken', 'plain'}, turns
+    assert turns['android'][0] == 'main-model' and 'native Android' in turns['android'][1]
     assert VOICE_LIVE_TURN_NOTE in turns['voice'][1] and 'UNIQUE_PRIOR_CONTEXT' in turns['voice'][1]
     assert turns['spoken'][0] == 'voice-model', 'a committed voice turn runs on auxiliary.voice_chat'
     assert turns['plain'] == ('main-model', 'PLAIN_TURN'), 'the following typed turn carries no surface'

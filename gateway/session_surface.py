@@ -1,4 +1,4 @@
-"""Per-turn client surface (floating HUD, live voice) carried through canonical admission.
+"""Per-turn client surface (floating HUD, live voice, Android) carried through canonical admission.
 
 A surface is a fact about ONE turn, never about the session: the same session alternates
 between the app window, the HUD and a spoken delegation. It is committed with the admission
@@ -10,7 +10,7 @@ from contextvars import ContextVar
 
 from hermes_state_runtime import RuntimeStoreError
 
-SURFACES = frozenset({'hud', 'voice-live'})
+SURFACES = frozenset({'hud', 'voice-live', 'android'})
 _VOICE_CONTEXT_LIMIT = 6000
 _SUBMIT_FIELDS = ('surface', 'voice_context', 'interrupted', 'voice_turn')
 _surface_turn = ContextVar('surface_turn', default=None)
@@ -64,12 +64,23 @@ def _voice_live_note(committed, valid_tool_names):
     return voice_live_turn_note(committed.get('voice_context') or '')
 
 
-_SURFACE_NOTES = {'hud': _hud_note, 'voice-live': _voice_live_note}
+def _android_note(committed, valid_tool_names):
+    return (
+        '[System note: The user is chatting in the native Android app, not a terminal or the '
+        'desktop app. Tools run on the Hermes host; its OS and filesystem may differ from the '
+        'Android device. To deliver a host file, emit MEDIA:/absolute/host/path on a separate line. '
+        'The app displays attachments as inline file cards with previews where supported. '
+        'Download saves to the device through a native file picker; Share opens the native share sheet. '
+        'Do not claim attachments are unavailable because this is a TUI, or offer desktop HTML widgets.]'
+    )
+
+
+_SURFACE_NOTES = {'hud': _hud_note, 'voice-live': _voice_live_note, 'android': _android_note}
 
 
 def surface_note(committed, valid_tool_names=None):
     """The model-bound note for a committed surface (``""`` for the plain app window): barge-in
-    first, then the HUD read-the-window-below prior or the spoken-delegation contract."""
+    first, then the surface's display or spoken-delegation contract."""
     notes = []
     if committed.get('interrupted'):
         from tools.tts_streaming import SPEECH_INTERRUPTED_NOTE
